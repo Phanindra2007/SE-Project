@@ -1,0 +1,6 @@
+- Check available balance and pending holds before authorizing a debit or transfer.
+- Reject debits that would make the available balance negative unless overdraft is explicitly enabled.
+- Enforce a configurable per-transaction debit limit and reject the transaction before posting when exceeded.
+- Enforce a rolling or calendar-day spending limit, including authorized, pending, and completed transactions.
+- Require a unique idempotency key for each transaction attempt and return the original result for retries.
+- Post debit and credit entries atomically; on timeout or downstream failure, roll back and record a reversible failure status.

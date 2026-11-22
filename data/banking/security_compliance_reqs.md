@@ -1,0 +1,6 @@
+- Require MFA for login and re-authenticate with step-up verification for transfers, beneficiaries, or access changes.
+- Enforce authorization server-side using account ownership and least-privilege role permissions for every operation.
+- Reject disabled, expired, locked, or revoked accounts and sessions before processing any transaction.
+- Encrypt sensitive data with TLS 1.2 or newer in transit and approved encryption at rest, including backups.
+- Write immutable audit records for authentication, authorization failures, configuration changes, and financial activity.
+- Screen transactions and beneficiaries against applicable sanctions, PEP, fraud, and AML risk rules before release.

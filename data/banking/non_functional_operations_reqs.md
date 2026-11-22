@@ -1,0 +1,6 @@
+- Maintain at least 99.95% monthly availability for core account and transaction APIs, excluding planned maintenance.
+- Complete 95% of balance inquiries in under 500 ms and 95% of payment submissions in under 2 seconds.
+- Return stable machine-readable error codes, sanitized customer messages, and correlation IDs for every failed request.
+- Use HTTPS and structured JSON logs with timestamps, correlation IDs, actor IDs, and outcome codes.
+- Retain immutable transaction records and audit logs for at least 7 years or the applicable regulatory period.
+- Redact personally identifiable data from logs and purge recoverable customer data according to documented retention schedules.
