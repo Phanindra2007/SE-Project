@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from dotenv import load_dotenv
-from openai import APIError, OpenAI
+from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -91,14 +91,14 @@ def _temperature_from_environment() -> float:
 
 def _extract_json_text(raw_text: str) -> Any:
     """Extract a JSON array or object from fenced or extra-text model output."""
-    text = raw_text.strip()
-    fenced = re.search(
-        r"```(?:json)?\s*(.*?)\s*```",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if fenced:
-        text = fenced.group(1).strip()
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise ValueError("The local model returned an empty response instead of JSON.")
+
+    text = raw_text.strip().lstrip("\ufeff")
+
+    # Smaller models commonly leave Markdown around an otherwise valid payload.
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = text.replace("```", "").strip()
 
     try:
         return json.loads(text)
@@ -106,6 +106,7 @@ def _extract_json_text(raw_text: str) -> Any:
         pass
 
     decoder = json.JSONDecoder()
+    candidates: list[Any] = []
     for index, character in enumerate(text):
         if character not in "[{":
             continue
@@ -114,9 +115,23 @@ def _extract_json_text(raw_text: str) -> Any:
         except json.JSONDecodeError:
             continue
         if isinstance(value, (list, dict)):
-            return value
+            candidates.append(value)
 
-    raise ValueError("The LLM response did not contain valid JSON.")
+    if candidates:
+        # Prefer the largest top-level payload; nested objects are unlikely to
+        # be the intended requirement list.
+        return max(
+            candidates,
+            key=lambda candidate: len(json.dumps(candidate, ensure_ascii=False)),
+        )
+
+    preview = " ".join(text.split())
+    if len(preview) > 160:
+        preview = preview[:157] + "..."
+    raise ValueError(
+        "The local model returned invalid JSON. "
+        f"Response preview: {preview or '<empty>'}"
+    )
 
 
 def parse_requirements_json(raw_text: str) -> list[dict[str, Any]]:
@@ -193,27 +208,33 @@ def parse_requirements_json(raw_text: str) -> list[dict[str, Any]]:
 
 
 def _build_prompt(target_functionality: str, banking_sources: str) -> str:
-    return f"""Generate a concise set of specific, testable banking software requirements
-for the target functionality: "{target_functionality}".
+    return f"""Create requirements for: "{target_functionality}".
 
-Ground every requirement in the provided banking source material. Do not invent
-bank policies or regulatory requirements beyond the source material. If an
-assumption is necessary, state it explicitly in "reasoning".
+STRICT SOURCE RULES:
+- Use only facts stated in the Banking source material below.
+- Do not add laws, limits, SLA values, design choices, or bank policies that are
+  not explicitly present in the source material.
+- Every requirement must cite one or more source filenames and section labels.
+- If a detail is unstated or inferred, begin the relevant sentence in
+  "reasoning" with "[Assumption]" and keep the requirement directly testable.
+- Do not use generic filler such as "system should be robust", "use best practices",
+  or "ensure a good experience".
+- Do not duplicate a requirement or mix multiple independent behaviors in one
+  requirement.
 
-Create roughly 8 functional requirements and 6 non-functional requirements.
-Use REQ-F-001 onward for Functional requirements and REQ-NF-001 onward for
-Non-Functional requirements.
-
-Return only a valid JSON array. Do not add Markdown fences or prose outside the
-array. Each object must contain exactly these keys:
-- id: string
-- type: "Functional" or "Non-Functional"
-- title: string
-- requirement: clear, measurable, testable statement
-- reasoning: supporting source points, relevance to the target functionality,
-  and assumptions or edge cases
-- source_references: non-empty list of source filenames and section labels,
-  such as ["account_transactions_reqs.md | Full document"]
+OUTPUT:
+- Return one valid JSON array and no other text or Markdown fences.
+- Produce roughly 8 Functional and 6 Non-Functional requirements.
+- Use REQ-F-001 onward for Functional and REQ-NF-001 onward for Non-Functional.
+- Every object must contain exactly:
+  id, type, title, requirement, reasoning, source_references.
+- "title" must be short and specific.
+- "requirement" must be clear and measurable/testable.
+- "reasoning" must name the supporting source points, explain relevance to the
+  target functionality, and identify any unstated detail with "[Assumption]".
+- "source_references" must contain only filename plus section labels grounded in
+  the Banking source material, for example:
+  ["account_transactions_reqs.md | Full document"].
 
 Banking source material:
 {banking_sources}
@@ -242,21 +263,34 @@ def generate_requirements(
     prompt = _build_prompt(target_functionality, banking_sources)
 
     client = OpenAI(base_url=base_url, api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise banking software requirements analyst. "
-                    "Return valid JSON only."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You generate grounded banking requirements. "
+                        "Follow the source rules and return JSON only."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+    except (APIConnectionError, APITimeoutError) as exc:
+        raise RuntimeError(
+            f"Cannot reach the local LLM at {base_url}. "
+            f"Verify the endpoint and that model '{model}' is running."
+        ) from exc
+    except APIError as exc:
+        raise RuntimeError(
+            f"The local LLM at {base_url} returned an API error for model "
+            f"'{model}': {exc}"
+        ) from exc
 
+    if not response.choices:
+        raise ValueError("The local model returned no choices.")
     raw_text = response.choices[0].message.content
     if not raw_text:
         raise ValueError("The LLM returned an empty response.")
