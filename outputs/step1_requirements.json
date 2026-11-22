@@ -1,0 +1,142 @@
+[
+  {
+    "id": "REQ-F-001",
+    "type": "Functional",
+    "title": "Check Available Balance and Pending Holds",
+    "requirement": "Verify available balance and pending holds before authorizing a domestic instant fund transfer.",
+    "reasoning": "The source mandates checking available balance and pending holds before authorizing a debit or transfer [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-002",
+    "type": "Functional",
+    "title": "Reject Negative Balance Debits",
+    "requirement": "Reject transfers that would result in a negative available balance unless overdraft is explicitly enabled.",
+    "reasoning": "The source specifies rejecting debits that would make the available balance negative unless overdraft is enabled [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-003",
+    "type": "Functional",
+    "title": "Enforce Per-Transaction Debit Limit",
+    "requirement": "Reject transactions exceeding the configurable per-transaction debit limit before posting.",
+    "reasoning": "The source requires enforcing a configurable per-transaction debit limit and rejecting transactions when exceeded [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-004",
+    "type": "Functional",
+    "title": "Enforce Rolling Spending Limit",
+    "requirement": "Enforce a rolling spending limit across authorized, pending, and completed transactions.",
+    "reasoning": "The source mandates enforcing a rolling or calendar-day spending limit for all transaction types [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-005",
+    "type": "Functional",
+    "title": "Require Idempotency Key for Retries",
+    "requirement": "Generate a unique idempotency key for each transaction attempt and return the original result for retries.",
+    "reasoning": "The source requires a unique idempotency key for each transaction attempt and returning original results for retries [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-006",
+    "type": "Functional",
+    "title": "Atomic Debit and Credit Posting",
+    "requirement": "Post debit and credit entries atomically; roll back and mark as reversible on timeout or failure.",
+    "reasoning": "The source specifies atomic posting of debit and credit entries with rollback on timeout or failure [account_transactions_reqs.md | Full document].",
+    "source_references": [
+      "account_transactions_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-007",
+    "type": "Functional",
+    "title": "Screen Transactions Against Sanctions",
+    "requirement": "Screen transactions and beneficiaries against sanctions, PEP, fraud, and AML rules before release.",
+    "reasoning": "The source requires screening transactions and beneficiaries against sanctions, PEP, fraud, and AML rules [security_compliance_reqs.md | Full document].",
+    "source_references": [
+      "security_compliance_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-F-008",
+    "type": "Functional",
+    "title": "Reject Disabled Accounts",
+    "requirement": "Reject transactions from disabled, expired, locked, or revoked accounts and sessions.",
+    "reasoning": "The source mandates rejecting transactions from disabled, expired, locked, or revoked accounts [security_compliance_reqs.md | Full document].",
+    "source_references": [
+      "security_compliance_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-001",
+    "type": "Non-Functional",
+    "title": "Core API Availability",
+    "requirement": "Maintain at least 99.95% monthly availability for core account and transaction APIs, excluding planned maintenance.",
+    "reasoning": "The source specifies 99.95% monthly availability for core APIs [non_functional_operations_reqs.md | Full document].",
+    "source_references": [
+      "non_functional_operations_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-002",
+    "type": "Non-Functional",
+    "title": "Balance Inquiry Response Time",
+    "requirement": "Complete 95% of balance inquiries in under 500 ms.",
+    "reasoning": "The source requires 95% of balance inquiries to complete in under 500 ms [non_functional_operations_reqs.md | Full document].",
+    "source_references": [
+      "non_functional_operations_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-003",
+    "type": "Non-Functional",
+    "title": "Payment Submission Response Time",
+    "requirement": "Complete 95% of payment submissions in under 2 seconds.",
+    "reasoning": "The source specifies 95% of payment submissions must complete in under 2 seconds [non_functional_operations_reqs.md | Full document].",
+    "source_references": [
+      "non_functional_operations_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-004",
+    "type": "Non-Functional",
+    "title": "Stable Error Codes and Logs",
+    "requirement": "Return stable machine-readable error codes, sanitized messages, and correlation IDs for failed requests.",
+    "reasoning": "The source mandates stable error codes, sanitized messages, and correlation IDs for failed requests [non_functional_operations_reqs.md | Full document].",
+    "source_references": [
+      "non_functional_operations_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-005",
+    "type": "Non-Functional",
+    "title": "Immutable Transaction Records",
+    "requirement": "Retain immutable transaction records and audit logs for at least 7 years or the applicable regulatory period.",
+    "reasoning": "The source requires retaining immutable transaction records and audit logs for 7 years or regulatory periods [non_functional_operations_reqs.md | Full document].",
+    "source_references": [
+      "non_functional_operations_reqs.md | Full document"
+    ]
+  },
+  {
+    "id": "REQ-NF-006",
+    "type": "Non-Functional",
+    "title": "Data Encryption and Retention",
+    "requirement": "Encrypt sensitive data with TLS 1.2+ in transit and approved encryption at rest, with recoverable data purged per retention schedules.",
+    "reasoning": "The source specifies TLS 1.2+ encryption in transit, approved encryption at rest, and data purging per retention schedules [security_compliance_reqs.md | Full document].",
+    "source_references": [
+      "security_compliance_reqs.md | Full document"
+    ]
+  }
+]
