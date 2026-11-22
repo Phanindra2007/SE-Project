@@ -26,19 +26,27 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
         raise ValueError("The local model returned an empty response instead of JSON.")
 
     text = raw_text.strip().lstrip("\ufeff")
-    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = text.replace("```", "").strip()
 
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
+    def decode(candidate: str) -> tuple[Any | None, json.JSONDecodeError | None]:
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError as exc:
+            return None, exc
+
+    # Handle a common local-model artifact: a trailing comma before a closing
+    # brace or bracket. It is removed only after JSON parsing fails.
+    repaired = re.sub(r",(\s*[}\]])", r"\1", text)
+    parsed, decode_error = decode(repaired)
+    if decode_error is not None:
         decoder = json.JSONDecoder()
         candidates: list[dict[str, Any]] = []
-        for index, character in enumerate(text):
+        for index, character in enumerate(repaired):
             if character != "{":
                 continue
             try:
-                value, _ = decoder.raw_decode(text[index:])
+                value, _ = decoder.raw_decode(repaired[index:])
             except json.JSONDecodeError:
                 continue
             if isinstance(value, dict):
@@ -48,7 +56,9 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
             if len(preview) > 160:
                 preview = preview[:157] + "..."
             raise ValueError(
-                "The local model returned invalid JSON. "
+                "The local model returned malformed JSON "
+                f"(line {decode_error.lineno}, column {decode_error.colno}). "
+                "Return a complete JSON object with all required keys. "
                 f"Response preview: {preview or '<empty>'}"
             )
         parsed = max(candidates, key=lambda item: len(json.dumps(item)))
@@ -73,8 +83,15 @@ def load_requirements(path: str | Path = DEFAULT_REQUIREMENTS_PATH) -> list[dict
 
     if not isinstance(requirements, list) or not requirements:
         raise ValueError("Generated requirements must be a non-empty JSON array.")
-    if not all(isinstance(item, dict) for item in requirements):
-        raise ValueError("Every generated requirement must be a JSON object.")
+    for index, item in enumerate(requirements, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Generated requirement {index} must be a JSON object.")
+        missing = {"id", "type", "title", "requirement", "reasoning"} - item.keys()
+        if missing:
+            raise ValueError(
+                f"Generated requirement {index} is missing keys: "
+                + ", ".join(sorted(missing))
+            )
     return requirements
 
 
@@ -97,26 +114,46 @@ def build_sdlc_prompt(
 ) -> str:
     context = project_context.strip() if project_context else ""
     context_text = f"\nOptional project/team context:\n{context}\n" if context else ""
-    return f"""Evaluate these generated requirements and recommend one SDLC model.
+    return f"""Evaluate the exact generated requirements below and recommend one SDLC model.
 
-Use only the requirements and optional context below. Do not introduce unrelated
-requirements or claim capabilities that are not supported. Ground the decision
-in requirement clarity/volatility, security and compliance criticality,
-testing/verification needs, and stakeholder/delivery cadence.
+GROUNDING RULES:
+- Cite requirement IDs (for example, REQ-F-005 or REQ-NF-003) and quote or name
+  their specific constraint in the justification.
+- Discuss concrete conflicts and trade-offs from this set: for example, fast
+  payment iteration versus immutable auditability, or rapid delivery versus
+  AML/security verification and 99.95% availability.
+- Explain requirement volatility and clarity from the actual statements.
+- Assess security/compliance criticality using the requirements that mention
+  authentication, authorization, encryption, audit logs, AML, sanctions, or retention.
+- Cover verification needs using the measurable limits, latencies, availability,
+  rollback, idempotency, and retention statements; do not invent unlisted targets.
+- Treat assumptions in requirement reasoning as uncertainty that needs validation,
+  not as proven facts.
+- Do not give textbook-only model definitions or generic claims such as "Agile
+  improves flexibility" without tying them to these requirements.
+- A less suitable alternative must explain the honest cost or mismatch for this
+  requirement set, not merely state that it is less modern.
 
-Choose from Agile, Iterative/Incremental, V-Model, Spiral, Waterfall,
-DevSecOps, or a clearly named hybrid. Avoid vague recommendations.
+MODEL CHOICES:
+Choose strictly from: Waterfall, V-Shaped, Prototype, RAD (Rapid Application Development),
+Spiral, or Agile. You may choose a clearly named hybrid only when
+every included model element is explicitly connected to a concrete requirement
+or constraint in Generated requirements. Do not select any model outside this
+exact class list.
+
+alternative_considered must compare the recommendation with one or two relevant
+models from this exact list (or named elements of this list in a hybrid).
 
 Return exactly one valid JSON object and no Markdown fences or prose:
 {{
-  "recommended_sdlc": "specific model name",
+  "recommended_sdlc": "specific model or explicitly named hybrid",
   "alternative_considered": [
-    {{"model": "alternative name", "reason": "why it is less suitable"}},
-    {{"model": "alternative name", "reason": "why it is less suitable"}}
+    {{"model": "alternative name", "reason": "specific trade-off for these requirements"}},
+    {{"model": "alternative name", "reason": "specific trade-off for these requirements"}}
   ],
-  "se_justification": "thorough paragraph covering requirement volatility/clarity, risk/security/compliance criticality, testing/verification needs, and stakeholder/delivery cadence",
+  "se_justification": "thorough paragraph with requirement IDs and explicit trade-offs among iteration speed, security, auditability, verification rigor, and stakeholder/delivery cadence",
   "key_risks_and_mitigations": [
-    {{"risk": "practical execution risk", "mitigation": "specific mitigation"}}
+    {{"risk": "risk tied to a listed requirement or assumption", "mitigation": "specific executable mitigation"}}
   ]
 }}
 
@@ -165,8 +202,10 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
         )
 
     risks = result["key_risks_and_mitigations"]
-    if not isinstance(risks, list) or not risks:
-        raise ValueError("key_risks_and_mitigations must be a non-empty list.")
+    if not isinstance(risks, list) or len(risks) < 3:
+        raise ValueError(
+            "key_risks_and_mitigations must contain at least three practical risks."
+        )
     normalized_risks: list[dict[str, str]] = []
     for index, item in enumerate(risks, start=1):
         if not isinstance(item, dict):
