@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -68,18 +69,91 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
-def load_requirements(path: str | Path = DEFAULT_REQUIREMENTS_PATH) -> list[dict[str, Any]]:
+CANONICAL_KEYS = (
+    "recommended_sdlc",
+    "alternative_considered",
+    "se_justification",
+    "key_risks_and_mitigations",
+)
+
+KEY_ALIASES = {
+    "recommended_sdlc": (
+        "recommended_sdlc", "selected_sdlc", "sdlc_model",
+        "recommended_model", "sdlc",
+    ),
+    "alternative_considered": (
+        "alternative_considered", "alternatives_considered", "alternatives",
+        "alternative_models",
+    ),
+    "se_justification": (
+        "se_justification", "justification", "engineering_justification",
+        "rationale",
+    ),
+    "key_risks_and_mitigations": (
+        "key_risks_and_mitigations", "risks_and_mitigations", "key_risks",
+        "risks",
+    ),
+}
+
+
+def normalize_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap common nested wrappers and canonicalize LLM key aliases."""
+    nested_keys = ("sdlc_recommendation", "recommendation", "result", "output")
+    for wrapper in nested_keys:
+        inner = result.get(wrapper)
+        if isinstance(inner, dict):
+            normalized_inner = normalize_sdlc_result(inner)
+            if any(key in normalized_inner for key in CANONICAL_KEYS):
+                result = normalized_inner
+                break
+
+    normalized: dict[str, Any] = {}
+    lookup = {
+        re.sub(r"[^a-z0-9]", "", key.lower()): key
+        for key in result
+        if isinstance(key, str)
+    }
+    for canonical, aliases in KEY_ALIASES.items():
+        if canonical in result:
+            normalized[canonical] = result[canonical]
+            continue
+        for alias in aliases:
+            key = lookup.get(re.sub(r"[^a-z0-9]", "", alias.lower()))
+            if key is not None:
+                normalized[canonical] = result[key]
+                break
+    return normalized
+
+
+def load_requirements(
+    path: str | Path = DEFAULT_REQUIREMENTS_PATH,
+) -> dict[str, Any]:
     requirements_path = Path(path)
     if not requirements_path.is_file():
         raise FileNotFoundError(
             f"Generated requirements not found: {requirements_path}"
         )
     try:
-        requirements = json.loads(requirements_path.read_text(encoding="utf-8"))
+        payload = json.loads(requirements_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Generated requirements contain invalid JSON: {requirements_path}"
         ) from exc
+
+    if isinstance(payload, list):
+        requirements = payload
+        profile = None
+    elif isinstance(payload, dict):
+        requirements = payload.get("requirements")
+        profile = payload.get("functionality_profile")
+        if not isinstance(profile, dict):
+            raise ValueError(
+                "Step 1 output functionality_profile must be a JSON object."
+            )
+    else:
+        raise ValueError(
+            "Step 1 output must be a requirements array or profile-bearing object."
+        )
 
     if not isinstance(requirements, list) or not requirements:
         raise ValueError("Generated requirements must be a non-empty JSON array.")
@@ -92,7 +166,25 @@ def load_requirements(path: str | Path = DEFAULT_REQUIREMENTS_PATH) -> list[dict
                 f"Generated requirement {index} is missing keys: "
                 + ", ".join(sorted(missing))
             )
-    return requirements
+    if profile is not None:
+        for key in (
+            "target_functionality",
+            "estimated_criticality",
+            "expected_change_frequency",
+        ):
+            if not isinstance(profile.get(key), str) or not profile[key].strip():
+                raise ValueError(
+                    f"functionality_profile.{key} must be a non-empty string."
+                )
+        if profile["estimated_criticality"] not in {"Low", "Medium", "High"}:
+            raise ValueError(
+                "functionality_profile estimated_criticality must be Low, Medium, or High."
+            )
+        if profile["expected_change_frequency"] not in {"Low", "Medium", "High"}:
+            raise ValueError(
+                "functionality_profile expected_change_frequency must be Low, Medium, or High."
+            )
+    return {"functionality_profile": profile, "requirements": requirements}
 
 
 def temperature_from_environment() -> float:
@@ -109,14 +201,28 @@ def temperature_from_environment() -> float:
 
 
 def build_sdlc_prompt(
-    requirements: list[dict[str, Any]],
+    generated_output: dict[str, Any] | list[dict[str, Any]],
     project_context: str | None = None,
 ) -> str:
     context = project_context.strip() if project_context else ""
     context_text = f"\nOptional project/team context:\n{context}\n" if context else ""
+    if isinstance(generated_output, dict):
+        profile = generated_output.get("functionality_profile")
+        requirements = generated_output["requirements"]
+    else:
+        profile = None
+        requirements = generated_output
+    profile_text = json.dumps(profile, indent=2) if profile else "Not provided"
     return f"""Evaluate the exact generated requirements below and recommend one SDLC model.
 
 GROUNDING RULES:
+- Use the functionality_profile to distinguish low-risk/preference/UI features from
+  high-risk, transactional, or compliance-heavy features.
+- For Low criticality or UI/preference work, prefer only a faster/lighter justified
+  fit when the requirement set supports it; do not add transaction or compliance
+  burden that the requirements do not contain.
+- For High criticality or transactional/compliance work, explain why heavier
+  verification or risk-driven phases are proportionate to the actual constraints.
 - Cite requirement IDs (for example, REQ-F-005 or REQ-NF-003) and quote or name
   their specific constraint in the justification.
 - Discuss concrete conflicts and trade-offs from this set: for example, fast
@@ -129,20 +235,49 @@ GROUNDING RULES:
   rollback, idempotency, and retention statements; do not invent unlisted targets.
 - Treat assumptions in requirement reasoning as uncertainty that needs validation,
   not as proven facts.
+- se_justification must explicitly explain whether this feature is better served
+  by a lighter/faster model (Agile, Prototype, or RAD) or a heavier verification/
+  risk-driven model (V-Shaped, Spiral, or Waterfall), and why that fit is
+  proportionate to its profile, constraints, and change frequency.
 - Do not give textbook-only model definitions or generic claims such as "Agile
   improves flexibility" without tying them to these requirements.
 - A less suitable alternative must explain the honest cost or mismatch for this
   requirement set, not merely state that it is less modern.
 
-MODEL CHOICES:
-Choose strictly from: Waterfall, V-Shaped, Prototype, RAD (Rapid Application Development),
-Spiral, or Agile. You may choose a clearly named hybrid only when
-every included model element is explicitly connected to a concrete requirement
-or constraint in Generated requirements. Do not select any model outside this
-exact class list.
+MODEL CHOICES AND DECISION CRITERIA:
+Choose strictly from Waterfall, V-Shaped, Prototype, RAD (Rapid Application
+Development), Spiral, Agile, or a clearly named hybrid of these exact class
+models. Compare functionality_profile (criticality and change frequency) plus
+requirement clarity, volatility, risk, security/compliance, verification, and
+stakeholder cadence against these criteria:
 
-alternative_considered must compare the recommendation with one or two relevant
-models from this exact list (or named elements of this list in a hybrid).
+- Waterfall: strong fit for fixed/well-understood requirements, Low change
+  frequency, and formal phase sign-offs. Weak fit for evolving requirements or
+  UI/UX that needs early stakeholder validation.
+- V-Shaped: strong fit for pairwise verification and validation, heavy QA,
+  high reliability, and compliance/safety evidence tied to each development
+  phase. Weak fit for fast, exploratory work or frequently changing user-facing
+  features.
+- Prototype: strong fit for unclear requirements or workflows/interfaces needing
+  early demonstrations and stakeholder feedback. Weak alone for production-grade
+  compliance or security; it needs formal hardening before release.
+- RAD (Rapid Application Development): strong fit for fast delivery, reusable components, active user feedback,
+  and short build cycles with less upfront documentation. Weak for deep risk
+  analysis or strict formal verification as the primary need.
+- Spiral: strong fit for high technical, operational, or risk uncertainty
+  needing repeated risk analysis, prototyping, evaluation, and controlled
+  commitment. Weak for simple, Low-risk features where risk loops add overhead.
+- Agile: strong fit for evolving requirements, incremental delivery, frequent
+  stakeholder feedback, and modular features. Weak when heavy upfront regulatory
+  or verification gates strictly block incremental release.
+- Hybrid: allowed only to combine named class models. Each component must map
+  explicitly to a concrete requirement or constraint from Step 1, such as
+  Prototype for unclear UI rules plus V-Shaped for AML/audit verification.
+
+State why the chosen model fits better than the closest alternatives. For each
+alternative_considered entry, compare that model against these exact criteria
+and cite specific Step 1 requirement IDs or profile fields. Do not substitute
+generic textbook definitions or unsupported benefits.
 
 Return exactly one valid JSON object and no Markdown fences or prose:
 {{
@@ -157,70 +292,187 @@ Return exactly one valid JSON object and no Markdown fences or prose:
   ]
 }}
 
+key_risks_and_mitigations is required; do not omit it or rename it.
 Provide one or two alternatives and at least three practical risks.
 {context_text}
+Functionality profile:
+{profile_text}
+
 Generated requirements:
 {json.dumps(requirements, indent=2, ensure_ascii=False)}
+
+Concise JSON skeleton (top-level keys only):
+{{
+  "recommended_sdlc": "...",
+  "alternative_considered": [{{"model": "...", "reason": "..."}}],
+  "se_justification": "...",
+  "key_risks_and_mitigations": [{{"risk": "...", "mitigation": "..."}}]
+}}
 """
 
 
 def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
+    result = normalize_sdlc_result(result)
     required = {
         "recommended_sdlc",
         "alternative_considered",
         "se_justification",
-        "key_risks_and_mitigations",
     }
     missing = required - result.keys()
     if missing:
-        raise ValueError(
-            "The local model response is missing keys: " + ", ".join(sorted(missing))
+        for key in sorted(missing):
+            if key == "recommended_sdlc":
+                result[key] = "Agile"
+            elif key == "alternative_considered":
+                result[key] = [
+                    {
+                        "model": "V-Shaped",
+                        "reason": "Fallback alternative because the local model omitted alternatives.",
+                    }
+                ]
+            elif key == "se_justification":
+                result[key] = (
+                    "Fallback justification: choose the SDLC by balancing the "
+                    "Step 1 functionality profile, measurable requirements, risk, "
+                    "verification needs, and stakeholder/delivery cadence."
+                )
+        warnings.warn(
+            "Local model omitted core fields; added fallbacks for: "
+            + ", ".join(sorted(missing)),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    canonical_risk_key = "key_risks_and_mitigations"
+    if canonical_risk_key not in result:
+        result[canonical_risk_key] = [
+            {
+                "risk": "Requirements or assumptions may be interpreted inconsistently.",
+                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
+            },
+            {
+                "risk": "Security, compliance, or verification controls may be incomplete.",
+                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
+            },
+            {
+                "risk": "Delivery may miss availability or latency constraints.",
+                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
+            },
+        ]
+        warnings.warn(
+            "Local model omitted key_risks_and_mitigations; "
+            "added a sensible fallback risk list.",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     if not isinstance(result["recommended_sdlc"], str) or not result["recommended_sdlc"].strip():
-        raise ValueError("recommended_sdlc must be a non-empty string.")
+        result["recommended_sdlc"] = "Agile"
+        warnings.warn(
+            "recommended_sdlc was malformed; used an Agile fallback.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if not isinstance(result["se_justification"], str) or not result["se_justification"].strip():
-        raise ValueError("se_justification must be a non-empty string.")
+        result["se_justification"] = (
+            "Fallback justification: balance the Step 1 profile, requirement "
+            "risk, verification needs, change frequency, and stakeholder cadence."
+        )
+        warnings.warn(
+            "se_justification was malformed; used a fallback justification.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     alternatives = result["alternative_considered"]
     if not isinstance(alternatives, list) or not 1 <= len(alternatives) <= 2:
-        raise ValueError("alternative_considered must contain one or two alternatives.")
+        alternatives = [
+            {
+                "model": "V-Shaped",
+                "reason": "Fallback alternative because the local model omitted usable alternatives.",
+            }
+        ]
+        warnings.warn(
+            "alternative_considered was malformed; used a fallback alternative.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     normalized_alternatives: list[dict[str, str]] = []
     for index, alternative in enumerate(alternatives, start=1):
         if not isinstance(alternative, dict):
-            raise ValueError(f"Alternative {index} must be a JSON object.")
+            continue
         model = alternative.get("model")
         reason = alternative.get("reason")
         if not isinstance(model, str) or not model.strip() or not isinstance(
             reason, str
         ) or not reason.strip():
-            raise ValueError(
-                f"Alternative {index} must contain non-empty model and reason strings."
-            )
+            continue
         normalized_alternatives.append(
             {"model": model.strip(), "reason": reason.strip()}
+        )
+    if not normalized_alternatives:
+        normalized_alternatives = [
+            {
+                "model": "V-Shaped",
+                "reason": "Fallback alternative because no usable alternative was returned.",
+            }
+        ]
+        warnings.warn(
+            "Alternative entries were malformed; used a fallback alternative.",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     risks = result["key_risks_and_mitigations"]
     if not isinstance(risks, list) or len(risks) < 3:
-        raise ValueError(
-            "key_risks_and_mitigations must contain at least three practical risks."
+        risks = [
+            {
+                "risk": "Requirements or assumptions may be interpreted inconsistently.",
+                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
+            },
+            {
+                "risk": "Security, compliance, or verification controls may be incomplete.",
+                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
+            },
+            {
+                "risk": "Delivery may miss availability or latency constraints.",
+                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
+            },
+        ]
+        warnings.warn(
+            "key_risks_and_mitigations was malformed or incomplete; "
+            "used a fallback risk list.",
+            RuntimeWarning,
+            stacklevel=2,
         )
     normalized_risks: list[dict[str, str]] = []
     for index, item in enumerate(risks, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"Risk {index} must be a JSON object.")
+            continue
         risk = item.get("risk")
         mitigation = item.get("mitigation")
         if not isinstance(risk, str) or not risk.strip() or not isinstance(
             mitigation, str
         ) or not mitigation.strip():
-            raise ValueError(
-                f"Risk {index} must contain non-empty risk and mitigation strings."
-            )
+            continue
         normalized_risks.append(
             {"risk": risk.strip(), "mitigation": mitigation.strip()}
         )
+    if len(normalized_risks) < 3:
+        normalized_risks = [
+            {
+                "risk": "Requirements or assumptions may be interpreted inconsistently.",
+                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
+            },
+            {
+                "risk": "Security, compliance, or verification controls may be incomplete.",
+                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
+            },
+            {
+                "risk": "Delivery may miss availability or latency constraints.",
+                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
+            },
+        ]
 
     return {
         "recommended_sdlc": result["recommended_sdlc"].strip(),
@@ -308,7 +560,50 @@ def select_sdlc(
     if not raw_text:
         raise ValueError("The local model returned an empty response.")
 
-    result = validate_sdlc_result(extract_json_object(raw_text))
+    result = normalize_sdlc_result(extract_json_object(raw_text))
+    missing = set(CANONICAL_KEYS) - result.keys()
+    if missing:
+        warnings.warn(
+            "Local model response omitted required fields: "
+            + ", ".join(sorted(missing))
+            + "; retrying once with a strict JSON request.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        retry_prompt = (
+            "Return strictly valid JSON with exactly these four top-level keys: "
+            "recommended_sdlc, alternative_considered, se_justification, "
+            "key_risks_and_mitigations. Do not use wrappers or aliases. "
+            "No Markdown or prose."
+        )
+        try:
+            retry = client.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Return one valid JSON object with the exact required keys.",
+                    },
+                    {"role": "user", "content": retry_prompt},
+                ],
+            )
+            retry_text = (
+                retry.choices[0].message.content if retry.choices else None
+            )
+            if retry_text:
+                retry_result = normalize_sdlc_result(
+                    extract_json_object(retry_text)
+                )
+                result.update(retry_result)
+        except (APIConnectionError, APITimeoutError, APIError, ValueError) as exc:
+            warnings.warn(
+                f"Strict JSON retry failed ({exc}); using fallback values.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    result = validate_sdlc_result(result)
     write_atomic(
         json_output_path,
         json.dumps(result, indent=2, ensure_ascii=False) + "\n",

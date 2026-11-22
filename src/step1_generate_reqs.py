@@ -134,20 +134,32 @@ def _extract_json_text(raw_text: str) -> Any:
     )
 
 
-def parse_requirements_json(raw_text: str) -> list[dict[str, Any]]:
-    """Safely parse, normalize, and validate the LLM JSON response."""
+def parse_requirements_json(
+    raw_text: str,
+    target_functionality: str | None = None,
+) -> dict[str, Any]:
+    """Parse and validate a profile-bearing requirements response."""
     parsed = _extract_json_text(raw_text)
 
     if isinstance(parsed, dict):
-        if "requirements" in parsed:
-            parsed = parsed["requirements"]
-        else:
-            raise ValueError(
-                "The JSON object must contain a 'requirements' array."
-            )
+        raw_profile = parsed.get("functionality_profile")
+        parsed = parsed.get("requirements")
+    else:
+        raw_profile = None
 
     if not isinstance(parsed, list) or not parsed:
         raise ValueError("The LLM response must be a non-empty JSON array.")
+
+    if raw_profile is None:
+        profile = {
+            "target_functionality": target_functionality or "Unspecified functionality",
+            "estimated_criticality": "Medium",
+            "expected_change_frequency": "Medium",
+        }
+    else:
+        if not isinstance(raw_profile, dict):
+            raise ValueError("functionality_profile must be a JSON object.")
+        profile = dict(raw_profile)
 
     validated: list[dict[str, Any]] = []
     for index, item in enumerate(parsed, start=1):
@@ -204,7 +216,28 @@ def parse_requirements_json(raw_text: str) -> list[dict[str, Any]]:
             }
         )
 
-    return validated
+    target = profile.get("target_functionality")
+    if not isinstance(target, str) or not target.strip():
+        target = target_functionality or "Unspecified functionality"
+    criticality = profile.get("estimated_criticality")
+    if criticality not in {"Low", "Medium", "High"}:
+        raise ValueError(
+            "functionality_profile estimated_criticality must be Low, Medium, or High."
+        )
+    change_frequency = profile.get("expected_change_frequency")
+    if change_frequency not in {"Low", "Medium", "High"}:
+        raise ValueError(
+            "functionality_profile expected_change_frequency must be Low, Medium, or High."
+        )
+
+    return {
+        "functionality_profile": {
+            "target_functionality": target.strip(),
+            "estimated_criticality": criticality,
+            "expected_change_frequency": change_frequency,
+        },
+        "requirements": validated,
+    }
 
 
 def _build_prompt(target_functionality: str, banking_sources: str) -> str:
@@ -212,6 +245,13 @@ def _build_prompt(target_functionality: str, banking_sources: str) -> str:
 
 STRICT SOURCE RULES:
 - Use only facts stated in the Banking source material below.
+- Select only source rules that directly apply to "{target_functionality}".
+- Do not force unrelated bank-wide controls onto low-risk or UI/preference
+  features. For example, do not require transaction limits, AML/sanctions,
+  atomic posting, or 7-year financial ledgers unless the target performs or
+  directly stores a transaction/compliance-sensitive action.
+- Conversely, include transaction, AML/compliance, audit, rollback, encryption,
+  and retention rules when the target materially performs those operations.
 - Do not add laws, limits, SLA values, design choices, or bank policies that are
   not explicitly present in the source material.
 - Every requirement must cite one or more source filenames and section labels.
@@ -223,7 +263,15 @@ STRICT SOURCE RULES:
   requirement.
 
 OUTPUT:
-- Return one valid JSON array and no other text or Markdown fences.
+- Return exactly one valid JSON object and no Markdown fences or prose.
+- Top-level keys:
+  - functionality_profile: target_functionality, estimated_criticality
+    (Low/Medium/High), and expected_change_frequency (Low/Medium/High)
+  - requirements: the requirement objects
+- Estimate profile fields only from direct applicability and the generated
+  requirements. UI/preference features are usually Low criticality and may have
+  Medium/High change frequency; transactional/compliance features are normally
+  High criticality.
 - Produce roughly 8 Functional and 6 Non-Functional requirements.
 - Use REQ-F-001 onward for Functional and REQ-NF-001 onward for Non-Functional.
 - Every object must contain exactly:
@@ -235,6 +283,15 @@ OUTPUT:
 - "source_references" must contain only filename plus section labels grounded in
   the Banking source material, for example:
   ["account_transactions_reqs.md | Full document"].
+- The response shape is:
+  {{
+    "functionality_profile": {{
+      "target_functionality": "{target_functionality}",
+      "estimated_criticality": "Low|Medium|High",
+      "expected_change_frequency": "Low|Medium|High"
+    }},
+    "requirements": [ ...requirement objects... ]
+  }}
 
 Banking source material:
 {banking_sources}
@@ -246,7 +303,7 @@ def generate_requirements(
     *,
     data_dir: str | Path = DEFAULT_DATA_DIR,
     output_path: str | Path = DEFAULT_OUTPUT_PATH,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Generate, validate, and save requirements for a target functionality."""
     target_functionality = target_functionality.strip()
     if not target_functionality:
@@ -295,18 +352,18 @@ def generate_requirements(
     if not raw_text:
         raise ValueError("The LLM returned an empty response.")
 
-    requirements = parse_requirements_json(raw_text)
+    result = parse_requirements_json(raw_text, target_functionality)
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(requirements, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     temporary.replace(destination)
 
-    return requirements
+    return result
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -322,13 +379,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
-        requirements = generate_requirements(args.target_functionality)
+        result = generate_requirements(args.target_functionality)
     except (FileNotFoundError, ValueError, RuntimeError, APIError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     print(
-        f"Generated {len(requirements)} requirements at "
+        f"Generated {len(result['requirements'])} requirements at "
         f"{DEFAULT_OUTPUT_PATH}"
     )
     return 0
