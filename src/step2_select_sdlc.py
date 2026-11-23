@@ -87,6 +87,10 @@ APPROVED_SDLC_MODELS = {
     "Agile",
 }
 
+# Neutral last-resort values only; valid LLM percentages always take precedence.
+FALLBACK_RECOMMENDED_MODEL = "Agile"
+FALLBACK_FIT_PERCENTAGE = 50.0
+
 KEY_ALIASES = {
     "recommended_sdlc": (
         "recommended_sdlc", "selected_sdlc", "sdlc_model",
@@ -303,6 +307,8 @@ RANKED OUTPUT RULE:
 - Assign rank starting at 1. Each percentage must be an integer or float from
   0 to 100 based on fit with Step 1 requirements, functionality_profile,
   criticality, change frequency, and concrete risks.
+- Do not copy the 0.0 values shown in JSON examples. Estimate every percentage
+  independently from the current feature's requirements and profile.
 - Each rationale must cite a requirement ID/profile field or explain its direct
   relevance. Scores are independent and do not need to sum to 100.
 - recommended_sdlc must exactly match the rank 1 sdlc_model.
@@ -313,17 +319,17 @@ Return exactly one valid JSON object and no Markdown fences or prose:
 {{
   "recommended_sdlc": "specific model or explicitly named hybrid",
   "alternative_considered": [
-    {{"model": "alternative name", "percentage": 75, "reason": "specific trade-off for these requirements"}},
-    {{"model": "alternative name", "percentage": 60, "reason": "specific trade-off for these requirements"}}
+    {{"model": "alternative name", "percentage": 0.0, "reason": "specific trade-off for these requirements"}},
+    {{"model": "alternative name", "percentage": 0.0, "reason": "specific trade-off for these requirements"}}
   ],
   "se_justification": "thorough paragraph with requirement IDs and explicit trade-offs among iteration speed, security, auditability, verification rigor, and stakeholder/delivery cadence",
   "key_risks_and_mitigations": [
     {{"risk": "risk tied to a listed requirement or assumption", "mitigation": "specific executable mitigation"}}
   ],
   "ranked_sdlc_options": [
-    {{"rank": 1, "sdlc_model": "...", "percentage": 90, "rationale": "..."}},
-    {{"rank": 2, "sdlc_model": "...", "percentage": 75, "rationale": "..."}},
-    {{"rank": 3, "sdlc_model": "...", "percentage": 60, "rationale": "..."}}
+    {{"rank": 1, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}},
+    {{"rank": 2, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}},
+    {{"rank": 3, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}}
   ]
 }}
 
@@ -339,10 +345,10 @@ Generated requirements:
 Concise JSON skeleton (top-level keys only):
 {{
   "recommended_sdlc": "...",
-  "alternative_considered": [{{"model": "...", "percentage": 75, "reason": "..."}}],
+  "alternative_considered": [{{"model": "...", "percentage": 0.0, "reason": "..."}}],
   "se_justification": "...",
   "key_risks_and_mitigations": [{{"risk": "...", "mitigation": "..."}}],
-  "ranked_sdlc_options": [{{"rank": 1, "sdlc_model": "...", "percentage": 90, "rationale": "..."}}]
+  "ranked_sdlc_options": [{{"rank": 1, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}}]
 }}
 """
 
@@ -358,7 +364,7 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
     if missing:
         for key in sorted(missing):
             if key == "recommended_sdlc":
-                result[key] = "Agile"
+                result[key] = FALLBACK_RECOMMENDED_MODEL
             elif key == "alternative_considered":
                 result[key] = [
                     {
@@ -403,7 +409,7 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
         )
 
     if not isinstance(result["recommended_sdlc"], str) or not result["recommended_sdlc"].strip():
-        result["recommended_sdlc"] = "Agile"
+        result["recommended_sdlc"] = FALLBACK_RECOMMENDED_MODEL
         warnings.warn(
             "recommended_sdlc was malformed; used an Agile fallback.",
             RuntimeWarning,
@@ -585,12 +591,16 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
     if normalized_ranked:
         recommended = normalized_ranked[0]["sdlc_model"]
     else:
-        recommended = recommended if recommended else "Agile"
+        recommended = (
+            recommended
+            if recommended
+            else FALLBACK_RECOMMENDED_MODEL
+        )
         normalized_ranked.append(
             {
                 "rank": 1,
                 "sdlc_model": recommended,
-                "percentage": 75,
+                "percentage": FALLBACK_FIT_PERCENTAGE,
                 "rationale": "Fallback ranking based on the Step 1 functionality profile.",
             }
         )
@@ -612,7 +622,7 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
             ):
                 alternative_percentage = max(
                     0.0,
-                    top_percentage - (len(normalized_ranked) * 10),
+                    top_percentage - 1.0,
                 )
             alternative_percentage = float(alternative_percentage)
             normalized_ranked.append(
@@ -642,7 +652,7 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
         top_percentage = float(normalized_ranked[0]["percentage"])
         fallback_percentage = max(
             0.0,
-            top_percentage - (len(normalized_ranked) * 10),
+            top_percentage - 1.0,
         )
         normalized_ranked.append(
             {

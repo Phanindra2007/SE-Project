@@ -134,9 +134,42 @@ def _extract_json_text(raw_text: str) -> Any:
     )
 
 
+def normalize_source_references(
+    item: dict[str, Any],
+    fallback_references: list[str],
+) -> None:
+    """Normalize local-model source references before strict validation."""
+    references = item.get("source_references")
+
+    if isinstance(references, str):
+        normalized = [references.strip()] if references.strip() else []
+    elif isinstance(references, list):
+        normalized = [
+            str(reference).strip()
+            for reference in references
+            if reference is not None and str(reference).strip()
+        ]
+    else:
+        normalized = []
+
+    item["source_references"] = normalized or list(fallback_references)
+
+
+def fallback_source_references(data_dir: str | Path) -> list[str]:
+    directory = Path(data_dir)
+    if not directory.is_dir():
+        return []
+    return [
+        path.name
+        for path in sorted(directory.glob("*.md"))
+        if path.is_file()
+    ]
+
+
 def parse_requirements_json(
     raw_text: str,
     target_functionality: str | None = None,
+    data_dir: str | Path = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
     """Parse and validate a profile-bearing requirements response."""
     parsed = _extract_json_text(raw_text)
@@ -161,10 +194,13 @@ def parse_requirements_json(
             raise ValueError("functionality_profile must be a JSON object.")
         profile = dict(raw_profile)
 
+    fallback_references = fallback_source_references(data_dir)
     validated: list[dict[str, Any]] = []
     for index, item in enumerate(parsed, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Requirement at index {index} is not a JSON object.")
+
+        normalize_source_references(item, fallback_references)
 
         missing = REQUIRED_KEYS - item.keys()
         if missing:
@@ -352,7 +388,11 @@ def generate_requirements(
     if not raw_text:
         raise ValueError("The LLM returned an empty response.")
 
-    result = parse_requirements_json(raw_text, target_functionality)
+    result = parse_requirements_json(
+        raw_text,
+        target_functionality,
+        data_dir,
+    )
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
