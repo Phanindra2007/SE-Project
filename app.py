@@ -35,27 +35,6 @@ def init_state() -> None:
     st.session_state.setdefault("error_message", None)
 
 
-def apply_llm_settings(base_url: str, model: str, temperature: str) -> bool:
-    try:
-        temperature_value = float(temperature)
-    except ValueError:
-        st.session_state["error_message"] = (
-            "LLM_TEMPERATURE must be a number between 0.0 and 2.0."
-        )
-        return False
-    if not 0.0 <= temperature_value <= 2.0:
-        st.session_state["error_message"] = (
-            "LLM_TEMPERATURE must be between 0.0 and 2.0."
-        )
-        return False
-
-    os.environ["LLM_BASE_URL"] = base_url.strip()
-    os.environ["LLM_MODEL"] = model.strip()
-    os.environ["LLM_TEMPERATURE"] = str(temperature_value)
-    os.environ.setdefault("LLM_API_KEY", "ollama")
-    return True
-
-
 def explain_error(exc: Exception) -> str:
     message = str(exc)
     lowered = message.lower()
@@ -123,16 +102,61 @@ def render_step1(output: dict[str, Any]) -> None:
 def render_step2(output: dict[str, Any]) -> None:
     st.metric("Recommended SDLC", str(output.get("recommended_sdlc", "Unknown")))
 
+    ranked_options = output.get("ranked_sdlc_options", [])
+    st.subheader("Ranked SDLC Fit")
+    if isinstance(ranked_options, list) and ranked_options:
+        ranked_rows = [
+            {
+                "Rank": option.get("rank"),
+                "SDLC Model": option.get("sdlc_model", "Unknown"),
+                "Fit": f"{option.get('percentage', 0)}%",
+                "Rationale": option.get("rationale", ""),
+            }
+            for option in ranked_options
+            if isinstance(option, dict)
+        ]
+        if ranked_rows:
+            st.dataframe(ranked_rows, use_container_width=True, hide_index=True)
+            for option in ranked_options:
+                if not isinstance(option, dict):
+                    continue
+                percentage = option.get("percentage", 0)
+                try:
+                    progress = max(0.0, min(float(percentage) / 100.0, 1.0))
+                except (TypeError, ValueError):
+                    progress = 0.0
+                st.caption(
+                    f"#{option.get('rank', '?')} "
+                    f"{option.get('sdlc_model', 'Unknown')} "
+                    f"— {option.get('percentage', 0)}%"
+                )
+                st.progress(progress)
+    else:
+        st.caption("No ranked SDLC options were returned.")
+
     st.subheader("Software Engineering Justification")
     st.write(output.get("se_justification", "No justification was returned."))
 
     st.subheader("Alternative Models Considered")
     alternatives = output.get("alternative_considered", [])
+    ranked_options = output.get("ranked_sdlc_options", [])
+    ranked_by_model = {
+        str(option.get("sdlc_model")): option
+        for option in ranked_options
+        if isinstance(option, dict)
+    }
     if isinstance(alternatives, list) and alternatives:
         for alternative in alternatives:
             if isinstance(alternative, dict):
+                model_name = str(alternative.get("model", "Unknown"))
+                percentage = alternative.get("percentage")
+                if percentage is None:
+                    ranked_match = ranked_by_model.get(model_name)
+                    if ranked_match:
+                        percentage = ranked_match.get("percentage")
+                fit_text = f" ({percentage}% fit)" if percentage is not None else ""
                 st.markdown(
-                    f"- **{alternative.get('model', 'Unknown')}**: "
+                    f"- **{model_name}{fit_text}**: "
                     f"{alternative.get('reason', '')}"
                 )
     else:
@@ -162,20 +186,6 @@ init_state()
 st.title("Banking Requirements & SDLC Explorer")
 
 with st.sidebar:
-    st.header("Local LLM Configuration")
-    base_url = st.text_input(
-        "LLM_BASE_URL",
-        value=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1/"),
-    )
-    model = st.text_input(
-        "LLM_MODEL",
-        value=os.getenv("LLM_MODEL", "qwen3:8b"),
-    )
-    temperature = st.text_input(
-        "LLM_TEMPERATURE",
-        value=os.getenv("LLM_TEMPERATURE", "0.2"),
-    )
-
     st.subheader("Banking Reference Files")
     if not DATA_DIR.is_dir():
         st.warning(f"No banking reference directory found at {DATA_DIR}")
@@ -194,10 +204,6 @@ st.subheader("Workflow")
 functionality = st.text_input(
     "Target banking functionality",
     placeholder="e.g., Domestic Instant Fund Transfer or Customer Notification and Alert Preferences",
-)
-context = st.text_area(
-    "Optional project/team/schedule context",
-    placeholder="e.g., two-week sprints, four-person team, mandatory pre-release compliance review",
 )
 
 step1_col, step2_col = st.columns(2)
@@ -221,18 +227,17 @@ if run_step1:
         st.session_state["error_message"] = (
             "Enter a target banking functionality before running Step 1."
         )
-    elif apply_llm_settings(base_url, model, temperature):
+    else:
         st.session_state["pending_step"] = "step1"
         st.session_state["pending_functionality"] = functionality.strip()
         st.session_state["is_running"] = True
         st.rerun()
 
 if run_step2:
-    if apply_llm_settings(base_url, model, temperature):
-        st.session_state["pending_step"] = "step2"
-        st.session_state["pending_context"] = context.strip() or None
-        st.session_state["is_running"] = True
-        st.rerun()
+    st.session_state["pending_step"] = "step2"
+    st.session_state["pending_context"] = None
+    st.session_state["is_running"] = True
+    st.rerun()
 
 if st.session_state["is_running"] and st.session_state["pending_step"]:
     pending_step = st.session_state["pending_step"]
@@ -275,12 +280,12 @@ if st.session_state["error_message"]:
     st.error(st.session_state["error_message"])
     st.session_state["error_message"] = None
 
-if st.session_state["step1_output"] is not None:
-    st.divider()
-    st.header("Step 1 Results")
-    render_step1(st.session_state["step1_output"])
-
 if st.session_state["step2_output"] is not None:
     st.divider()
     st.header("Step 2 Results")
     render_step2(st.session_state["step2_output"])
+
+if st.session_state["step1_output"] is not None:
+    st.divider()
+    st.header("Step 1 Results")
+    render_step1(st.session_state["step1_output"])

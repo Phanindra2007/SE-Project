@@ -74,7 +74,18 @@ CANONICAL_KEYS = (
     "alternative_considered",
     "se_justification",
     "key_risks_and_mitigations",
+    "ranked_sdlc_options",
 )
+
+APPROVED_SDLC_MODELS = {
+    "Waterfall",
+    "V-Shaped",
+    "Prototype",
+    "RAD",
+    "RAD (Rapid Application Development)",
+    "Spiral",
+    "Agile",
+}
 
 KEY_ALIASES = {
     "recommended_sdlc": (
@@ -92,6 +103,10 @@ KEY_ALIASES = {
     "key_risks_and_mitigations": (
         "key_risks_and_mitigations", "risks_and_mitigations", "key_risks",
         "risks",
+    ),
+    "ranked_sdlc_options": (
+        "ranked_sdlc_options", "ranked_options", "sdlc_ranking",
+        "ranked_models", "model_ranking",
     ),
 }
 
@@ -279,16 +294,36 @@ alternative_considered entry, compare that model against these exact criteria
 and cite specific Step 1 requirement IDs or profile fields. Do not substitute
 generic textbook definitions or unsupported benefits.
 
+RANKED OUTPUT RULE:
+- ranked_sdlc_options MUST contain at least 3 distinct approved models or
+  clearly justified hybrids: Rank 1 is primary and Ranks 2+ are alternatives.
+  Use 3 to 6 approved options or clearly justified
+  hybrids, sorted strictly by descending percentage.
+- Percentages must be strictly decreasing from Rank 1 downward.
+- Assign rank starting at 1. Each percentage must be an integer or float from
+  0 to 100 based on fit with Step 1 requirements, functionality_profile,
+  criticality, change frequency, and concrete risks.
+- Each rationale must cite a requirement ID/profile field or explain its direct
+  relevance. Scores are independent and do not need to sum to 100.
+- recommended_sdlc must exactly match the rank 1 sdlc_model.
+- alternative_considered must describe lower-ranked options rather than a
+  separate unrelated comparison.
+
 Return exactly one valid JSON object and no Markdown fences or prose:
 {{
   "recommended_sdlc": "specific model or explicitly named hybrid",
   "alternative_considered": [
-    {{"model": "alternative name", "reason": "specific trade-off for these requirements"}},
-    {{"model": "alternative name", "reason": "specific trade-off for these requirements"}}
+    {{"model": "alternative name", "percentage": 75, "reason": "specific trade-off for these requirements"}},
+    {{"model": "alternative name", "percentage": 60, "reason": "specific trade-off for these requirements"}}
   ],
   "se_justification": "thorough paragraph with requirement IDs and explicit trade-offs among iteration speed, security, auditability, verification rigor, and stakeholder/delivery cadence",
   "key_risks_and_mitigations": [
     {{"risk": "risk tied to a listed requirement or assumption", "mitigation": "specific executable mitigation"}}
+  ],
+  "ranked_sdlc_options": [
+    {{"rank": 1, "sdlc_model": "...", "percentage": 90, "rationale": "..."}},
+    {{"rank": 2, "sdlc_model": "...", "percentage": 75, "rationale": "..."}},
+    {{"rank": 3, "sdlc_model": "...", "percentage": 60, "rationale": "..."}}
   ]
 }}
 
@@ -304,9 +339,10 @@ Generated requirements:
 Concise JSON skeleton (top-level keys only):
 {{
   "recommended_sdlc": "...",
-  "alternative_considered": [{{"model": "...", "reason": "..."}}],
+  "alternative_considered": [{{"model": "...", "percentage": 75, "reason": "..."}}],
   "se_justification": "...",
-  "key_risks_and_mitigations": [{{"risk": "...", "mitigation": "..."}}]
+  "key_risks_and_mitigations": [{{"risk": "...", "mitigation": "..."}}],
+  "ranked_sdlc_options": [{{"rank": 1, "sdlc_model": "...", "percentage": 90, "rationale": "..."}}]
 }}
 """
 
@@ -397,7 +433,7 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
             RuntimeWarning,
             stacklevel=2,
         )
-    normalized_alternatives: list[dict[str, str]] = []
+    normalized_alternatives: list[dict[str, Any]] = []
     for index, alternative in enumerate(alternatives, start=1):
         if not isinstance(alternative, dict):
             continue
@@ -407,8 +443,16 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
             reason, str
         ) or not reason.strip():
             continue
+        percentage = alternative.get("percentage")
+        normalized_alternative = {"model": model.strip(), "reason": reason.strip()}
+        if (
+            isinstance(percentage, (int, float))
+            and not isinstance(percentage, bool)
+            and 0 <= float(percentage) <= 100
+        ):
+            normalized_alternative["percentage"] = percentage
         normalized_alternatives.append(
-            {"model": model.strip(), "reason": reason.strip()}
+            normalized_alternative
         )
     if not normalized_alternatives:
         normalized_alternatives = [
@@ -474,11 +518,182 @@ def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
             },
         ]
 
+    ranked_raw = result.get("ranked_sdlc_options")
+    normalized_ranked: list[dict[str, Any]] = []
+    if isinstance(ranked_raw, list):
+        for item in ranked_raw:
+            if not isinstance(item, dict):
+                continue
+            model = item.get("sdlc_model")
+            percentage = item.get("percentage")
+            rationale = item.get("rationale")
+            if (
+                not isinstance(model, str)
+                or not model.strip()
+                or isinstance(percentage, bool)
+                or not isinstance(percentage, (int, float))
+                or not 0 <= float(percentage) <= 100
+                or not isinstance(rationale, str)
+                or not rationale.strip()
+            ):
+                continue
+            model_name = model.strip()
+            is_approved_hybrid = (
+                " hybrid" in model_name.lower()
+                and any(approved in model_name for approved in APPROVED_SDLC_MODELS)
+            )
+            if model_name not in APPROVED_SDLC_MODELS and not is_approved_hybrid:
+                continue
+            normalized_ranked.append(
+                {
+                    "rank": 0,
+                    "sdlc_model": model.strip(),
+                    "percentage": percentage,
+                    "rationale": rationale.strip(),
+                }
+            )
+
+    normalized_ranked.sort(
+        key=lambda item: float(item["percentage"]),
+        reverse=True,
+    )
+
+    # Remove duplicate models and enforce strictly decreasing fit percentages.
+    distinct_ranked: list[dict[str, Any]] = []
+    seen_models: set[str] = set()
+    previous_percentage: float | None = None
+    for item in normalized_ranked:
+        model_name = item["sdlc_model"]
+        if model_name in seen_models:
+            continue
+        percentage = float(item["percentage"])
+        if previous_percentage is not None and percentage >= previous_percentage:
+            percentage = max(0.0, previous_percentage - 1.0)
+        item["percentage"] = int(percentage) if percentage.is_integer() else round(percentage, 2)
+        previous_percentage = float(percentage)
+        seen_models.add(model_name)
+        distinct_ranked.append(item)
+    normalized_ranked = distinct_ranked
+
+    for rank, item in enumerate(normalized_ranked, start=1):
+        item["rank"] = rank
+
+    if not normalized_ranked:
+        normalized_ranked = []
+
+    recommended = result["recommended_sdlc"].strip()
+    if normalized_ranked:
+        recommended = normalized_ranked[0]["sdlc_model"]
+    else:
+        recommended = recommended if recommended else "Agile"
+        normalized_ranked.append(
+            {
+                "rank": 1,
+                "sdlc_model": recommended,
+                "percentage": 75,
+                "rationale": "Fallback ranking based on the Step 1 functionality profile.",
+            }
+        )
+        warnings.warn(
+            "ranked_sdlc_options was missing or malformed; "
+            "added a sensible fallback ranking.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    # Promote models from alternative_considered when the LLM omitted ranks.
+    for alternative in normalized_alternatives:
+        model_name = alternative["model"]
+        if model_name not in seen_models:
+            top_percentage = float(normalized_ranked[0]["percentage"])
+            alternative_percentage = alternative.get("percentage")
+            if not isinstance(alternative_percentage, (int, float)) or isinstance(
+                alternative_percentage, bool
+            ):
+                alternative_percentage = max(
+                    0.0,
+                    top_percentage - (len(normalized_ranked) * 10),
+                )
+            alternative_percentage = float(alternative_percentage)
+            normalized_ranked.append(
+                {
+                    "rank": 0,
+                    "sdlc_model": model_name,
+                    "percentage": (
+                        int(alternative_percentage)
+                        if alternative_percentage.is_integer()
+                        else round(alternative_percentage, 2)
+                    ),
+                    "rationale": alternative["reason"],
+                }
+            )
+            seen_models.add(model_name)
+
+    fallback_models = [
+        "Agile", "V-Shaped", "Spiral", "RAD", "Prototype", "Waterfall",
+    ]
+    while len(normalized_ranked) < 3:
+        candidate = next(
+            (model for model in fallback_models if model not in seen_models),
+            None,
+        )
+        if candidate is None:
+            break
+        top_percentage = float(normalized_ranked[0]["percentage"])
+        fallback_percentage = max(
+            0.0,
+            top_percentage - (len(normalized_ranked) * 10),
+        )
+        normalized_ranked.append(
+            {
+                "rank": 0,
+                "sdlc_model": candidate,
+                "percentage": (
+                    int(fallback_percentage)
+                    if fallback_percentage.is_integer()
+                    else round(fallback_percentage, 2)
+                ),
+                "rationale": (
+                    f"{candidate} is included as a lower-ranked class alternative "
+                    "and should be checked against the concrete Step 1 constraints."
+                ),
+            }
+        )
+        seen_models.add(candidate)
+
+    normalized_ranked.sort(
+        key=lambda item: float(item["percentage"]),
+        reverse=True,
+    )
+    normalized_ranked = normalized_ranked[:6]
+    previous_percentage = None
+    for rank, item in enumerate(normalized_ranked, start=1):
+        item["rank"] = rank
+        percentage = float(item["percentage"])
+        if previous_percentage is not None and percentage >= previous_percentage:
+            percentage = max(0.0, previous_percentage - 1.0)
+            item["percentage"] = int(percentage) if percentage.is_integer() else round(percentage, 2)
+        previous_percentage = float(item["percentage"])
+
+    recommended = normalized_ranked[0]["sdlc_model"]
+    result["recommended_sdlc"] = recommended
+
+    ranked_alternatives = [
+        {
+            "model": item["sdlc_model"],
+            "percentage": item["percentage"],
+            "reason": item["rationale"],
+        }
+        for item in normalized_ranked[1:]
+    ]
+    normalized_alternatives = ranked_alternatives
+
     return {
-        "recommended_sdlc": result["recommended_sdlc"].strip(),
+        "recommended_sdlc": recommended,
         "alternative_considered": normalized_alternatives,
         "se_justification": result["se_justification"].strip(),
         "key_risks_and_mitigations": normalized_risks,
+        "ranked_sdlc_options": normalized_ranked,
     }
 
 
@@ -488,11 +703,30 @@ def render_markdown(result: dict[str, Any]) -> str:
         "",
         f"## Recommended SDLC: {result['recommended_sdlc']}",
         "",
+        "## Ranked SDLC Options",
+        "",
+        "| Rank | SDLC Model | Fit Score | Rationale |",
+        "|---:|---|---:|---|",
+    ]
+    for option in result.get("ranked_sdlc_options", []):
+        rationale = str(option["rationale"]).replace("|", "\\|").replace("\n", " ")
+        model = str(option["sdlc_model"]).replace("|", "\\|")
+        lines.append(
+            f"| {option['rank']} | {model} | "
+            f"{option['percentage']}% | {rationale} |"
+        )
+
+    lines.extend([
+        "",
         "## Alternatives Considered",
         "",
-    ]
+    ])
     for alternative in result["alternative_considered"]:
-        lines.append(f"- **{alternative['model']}**: {alternative['reason']}")
+        percentage = alternative.get("percentage")
+        fit_text = f" ({percentage}% fit)" if percentage is not None else ""
+        lines.append(
+            f"- **{alternative['model']}**{fit_text}: {alternative['reason']}"
+        )
 
     lines.extend(["", "## Software Engineering Justification", "", result["se_justification"], "",
                   "## Key Risks and Mitigations", ""])
@@ -571,10 +805,11 @@ def select_sdlc(
             stacklevel=2,
         )
         retry_prompt = (
-            "Return strictly valid JSON with exactly these four top-level keys: "
+            "Return strictly valid JSON with exactly these top-level keys: "
             "recommended_sdlc, alternative_considered, se_justification, "
-            "key_risks_and_mitigations. Do not use wrappers or aliases. "
-            "No Markdown or prose."
+            "key_risks_and_mitigations, and ranked_sdlc_options. "
+            "ranked_sdlc_options must be sorted by descending percentage. "
+            "Do not use wrappers or aliases. No Markdown or prose."
         )
         try:
             retry = client.chat.completions.create(
