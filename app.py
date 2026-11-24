@@ -57,14 +57,14 @@ def render_step1(output: dict[str, Any]) -> None:
     profile = output.get("functionality_profile")
     if isinstance(profile, dict):
         st.subheader("Functionality Profile")
-        columns = st.columns(3)
+        target = str(profile.get("target_functionality", "Unknown"))
+        st.markdown(f"**Target Functionality:** {target}")
+
+        columns = st.columns(2)
         columns[0].metric(
-            "Target", str(profile.get("target_functionality", "Unknown"))
-        )
-        columns[1].metric(
             "Criticality", str(profile.get("estimated_criticality", "Unknown"))
         )
-        columns[2].metric(
+        columns[1].metric(
             "Change Frequency",
             str(profile.get("expected_change_frequency", "Unknown")),
         )
