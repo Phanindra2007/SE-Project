@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -166,6 +167,59 @@ def fallback_source_references(data_dir: str | Path) -> list[str]:
     ]
 
 
+def infer_functionality_profile(
+    target_functionality: str,
+    requirements: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Derive profile values from requirement language when the model omits them."""
+    evidence = " ".join(
+        [
+            target_functionality,
+            *(
+                f"{item.get('title', '')} {item.get('requirement', '')}"
+                for item in requirements
+            ),
+        ]
+    ).casefold()
+    transactional_or_regulated = bool(
+        re.search(
+            r"\b(transfer|payment|transaction|debit|credit|aml|sanction|"
+            r"regulatory|compliance|step-up authentication)\b",
+            evidence,
+        )
+    )
+    security_control = bool(
+        re.search(
+            r"\b(authentication|authorization|encrypt\w*|security|mfa|audit)\b",
+            evidence,
+        )
+    )
+    user_facing = bool(
+        re.search(
+            r"\b(ui|preference|notification|alert|settings|workflow|user interface)\b",
+            evidence,
+        )
+    )
+    if transactional_or_regulated or security_control:
+        criticality = "High"
+    elif user_facing:
+        criticality = "Low"
+    else:
+        criticality = "Medium"
+
+    if user_facing or re.search(r"\b(evolving|frequent changes|iterative feedback)\b", evidence):
+        change_frequency = "High"
+    elif re.search(r"\b(fixed scope|stable requirements|no planned changes)\b", evidence):
+        change_frequency = "Low"
+    else:
+        change_frequency = "Medium"
+    return {
+        "target_functionality": target_functionality,
+        "estimated_criticality": criticality,
+        "expected_change_frequency": change_frequency,
+    }
+
+
 def parse_requirements_json(
     raw_text: str,
     target_functionality: str | None = None,
@@ -183,16 +237,8 @@ def parse_requirements_json(
     if not isinstance(parsed, list) or not parsed:
         raise ValueError("The LLM response must be a non-empty JSON array.")
 
-    if raw_profile is None:
-        profile = {
-            "target_functionality": target_functionality or "Unspecified functionality",
-            "estimated_criticality": "Medium",
-            "expected_change_frequency": "Medium",
-        }
-    else:
-        if not isinstance(raw_profile, dict):
-            raise ValueError("functionality_profile must be a JSON object.")
-        profile = dict(raw_profile)
+    if raw_profile is not None and not isinstance(raw_profile, dict):
+        raw_profile = {}
 
     fallback_references = fallback_source_references(data_dir)
     validated: list[dict[str, Any]] = []
@@ -252,18 +298,32 @@ def parse_requirements_json(
             }
         )
 
-    target = profile.get("target_functionality")
-    if not isinstance(target, str) or not target.strip():
-        target = target_functionality or "Unspecified functionality"
+    target = target_functionality or "; ".join(
+        item["title"] for item in validated
+    )
+    profile = raw_profile if isinstance(raw_profile, dict) else {}
+    supplied_target = profile.get("target_functionality")
+    if isinstance(supplied_target, str) and supplied_target.strip():
+        target = supplied_target.strip()
+    inferred_profile = infer_functionality_profile(target, validated)
     criticality = profile.get("estimated_criticality")
     if criticality not in {"Low", "Medium", "High"}:
-        raise ValueError(
-            "functionality_profile estimated_criticality must be Low, Medium, or High."
-        )
+        criticality = inferred_profile["estimated_criticality"]
     change_frequency = profile.get("expected_change_frequency")
     if change_frequency not in {"Low", "Medium", "High"}:
-        raise ValueError(
-            "functionality_profile expected_change_frequency must be Low, Medium, or High."
+        change_frequency = inferred_profile["expected_change_frequency"]
+    if (
+        not isinstance(raw_profile, dict)
+        or not isinstance(supplied_target, str)
+        or not supplied_target.strip()
+        or profile.get("estimated_criticality") not in {"Low", "Medium", "High"}
+        or profile.get("expected_change_frequency") not in {"Low", "Medium", "High"}
+    ):
+        warnings.warn(
+            "The local model omitted or malformed functionality_profile fields; "
+            "inferred them from the target and generated requirements.",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     return {

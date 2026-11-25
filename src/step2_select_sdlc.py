@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -85,11 +86,87 @@ APPROVED_SDLC_MODELS = {
     "RAD (Rapid Application Development)",
     "Spiral",
     "Agile",
+    "Agile-DevSecOps",
+    "Agile + V-Model",
+    "Prototype + V-Shaped",
+    "Spiral + Agile",
 }
 
-# Neutral last-resort values only; valid LLM percentages always take precedence.
-FALLBACK_RECOMMENDED_MODEL = "Agile"
-FALLBACK_FIT_PERCENTAGE = 50.0
+# Qualitative class-model criteria, not preassigned scores or percentages.
+MODEL_SIGNAL_FIT = {
+    "Waterfall": {
+        "supports": {
+            "stable_scope", "change_low", "formal_gates", "compliance", "audit",
+        },
+        "tradeoffs": {
+            "change_high", "ui_workflow", "uncertainty", "fast_delivery",
+            "criticality_high", "security", "availability",
+            "transactional_safety", "verification",
+        },
+    },
+    "V-Shaped": {
+        "supports": {
+            "formal_gates", "verification", "criticality_high", "security",
+            "compliance", "audit", "availability", "performance",
+            "transactional_safety",
+        },
+        "tradeoffs": {"change_high", "ui_workflow", "uncertainty", "fast_delivery"},
+    },
+    "Prototype": {
+        "supports": {
+            "uncertainty", "ui_workflow", "change_high", "stakeholder_feedback",
+        },
+        "tradeoffs": {
+            "criticality_high", "security", "compliance", "audit",
+            "formal_gates", "verification", "transactional_safety",
+        },
+    },
+    "RAD": {
+        "supports": {
+            "change_high", "change_medium", "ui_workflow", "stakeholder_feedback",
+            "fast_delivery",
+        },
+        "tradeoffs": {
+            "criticality_high", "security", "compliance", "audit",
+            "formal_gates", "verification", "transactional_safety",
+        },
+    },
+    "Spiral": {
+        "supports": {
+            "criticality_high", "security", "compliance", "audit",
+            "availability", "performance", "transactional_safety",
+            "uncertainty", "assumption", "verification", "formal_gates",
+        },
+        "tradeoffs": {"criticality_low", "change_low", "fast_delivery"},
+    },
+    "Agile": {
+        "supports": {
+            "change_high", "change_medium", "ui_workflow",
+            "stakeholder_feedback", "modular_delivery",
+        },
+        "tradeoffs": {
+            "formal_gates", "verification", "compliance", "audit", "security",
+        },
+    },
+    "Agile-DevSecOps": {
+        "supports": {
+            "change_high", "change_medium", "security", "compliance", "audit",
+            "availability", "performance", "transactional_safety",
+            "modular_delivery",
+        },
+        "tradeoffs": {"stable_scope"},
+    },
+}
+
+HYBRID_COMPONENTS = {
+    "Agile + V-Model": ("Agile", "V-Shaped"),
+    "Prototype + V-Shaped": ("Prototype", "V-Shaped"),
+    "Spiral + Agile": ("Spiral", "Agile"),
+    "Agile-DevSecOps": ("Agile", "V-Shaped"),
+}
+SCORING_CANDIDATES = tuple(
+    dict.fromkeys((*MODEL_SIGNAL_FIT, *HYBRID_COMPONENTS))
+)
 
 KEY_ALIASES = {
     "recommended_sdlc": (
@@ -142,6 +219,107 @@ def normalize_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
                 normalized[canonical] = result[key]
                 break
     return normalized
+
+
+def sdlc_response_issues(
+    result: dict[str, Any],
+    generated_output: dict[str, Any],
+    project_context: str | None,
+) -> list[str]:
+    """Identify schema and grounding defects worth one strict-response retry."""
+    factors = analyze_step1_factors(generated_output, project_context)
+    issues: list[str] = []
+    ranking = result.get("ranked_sdlc_options")
+    if not isinstance(ranking, list) or len(ranking) < 3:
+        issues.append("ranked_sdlc_options needs at least three entries")
+    else:
+        seen_models: set[str] = set()
+        percentages: list[float] = []
+        for item in ranking:
+            if not isinstance(item, dict):
+                issues.append("a ranked option is not an object")
+                continue
+            model = normalize_model_name(item.get("sdlc_model", item.get("model")))
+            if not model or model in seen_models:
+                issues.append("ranked options contain a missing or duplicate model")
+                continue
+            seen_models.add(model)
+            percentage = item.get("percentage")
+            if (
+                not isinstance(percentage, (int, float))
+                or isinstance(percentage, bool)
+                or not math.isfinite(float(percentage))
+                or not 0 <= float(percentage) <= 100
+            ):
+                issues.append(f"{model} has an invalid percentage")
+                continue
+            percentages.append(float(percentage))
+            rationale = item.get("rationale")
+            if (
+                not isinstance(rationale, str)
+                or not rationale_matches_step1(rationale, factors)
+            ):
+                issues.append(f"{model} rationale lacks current requirement evidence")
+        if any(left < right for left, right in zip(percentages, percentages[1:])):
+            issues.append("ranked percentages are not sorted highest to lowest")
+        missing_models = set(SCORING_CANDIDATES) - seen_models
+        if missing_models:
+            issues.append(
+                "ranked options omit evaluated candidates: "
+                + ", ".join(sorted(missing_models))
+            )
+        first_model = (
+            normalize_model_name(ranking[0].get("sdlc_model"))
+            if isinstance(ranking[0], dict)
+            else None
+        )
+        if normalize_model_name(result.get("recommended_sdlc")) != first_model:
+            issues.append("recommended_sdlc does not match rank one")
+
+    justification = result.get("se_justification")
+    if not isinstance(justification, str) or not rationale_matches_step1(
+        justification, factors
+    ):
+        issues.append("se_justification lacks current requirement evidence")
+
+    alternatives = result.get("alternative_considered")
+    if not isinstance(alternatives, list) or not alternatives:
+        issues.append("alternative_considered is missing lower-ranked models")
+    else:
+        for item in alternatives:
+            if not isinstance(item, dict):
+                issues.append("an alternative entry is not an object")
+                continue
+            model = normalize_model_name(item.get("model", item.get("sdlc_model")))
+            reason = item.get("reason", item.get("rationale"))
+            percentage = item.get("percentage")
+            if (
+                not model
+                or not isinstance(reason, str)
+                or not rationale_matches_step1(reason, factors)
+                or not isinstance(percentage, (int, float))
+                or isinstance(percentage, bool)
+                or not math.isfinite(float(percentage))
+                or not 0 <= float(percentage) <= 100
+            ):
+                issues.append("an alternative entry lacks a grounded model, score, or reason")
+    risks = result.get("key_risks_and_mitigations")
+    if not isinstance(risks, list) or len(risks) < 3:
+        issues.append("key_risks_and_mitigations needs three current-run risks")
+    else:
+        grounded_risks = [
+            item
+            for item in risks
+            if isinstance(item, dict)
+            and isinstance(item.get("risk"), str)
+            and isinstance(item.get("mitigation"), str)
+            and rationale_matches_step1(
+                f"{item['risk']} {item['mitigation']}", factors
+            )
+        ]
+        if len(grounded_risks) < 3:
+            issues.append("risk mitigations lack current requirement evidence")
+    return issues
 
 
 def load_requirements(
@@ -231,7 +409,9 @@ def build_sdlc_prompt(
     else:
         profile = None
         requirements = generated_output
+        generated_output = {"functionality_profile": None, "requirements": requirements}
     profile_text = json.dumps(profile, indent=2) if profile else "Not provided"
+    factor_signals = analyze_step1_factors(generated_output, context)
     return f"""Evaluate the exact generated requirements below and recommend one SDLC model.
 
 GROUNDING RULES:
@@ -245,8 +425,8 @@ GROUNDING RULES:
 - Cite requirement IDs (for example, REQ-F-005 or REQ-NF-003) and quote or name
   their specific constraint in the justification.
 - Discuss concrete conflicts and trade-offs from this set: for example, fast
-  payment iteration versus immutable auditability, or rapid delivery versus
-  AML/security verification and 99.95% availability.
+  transaction iteration versus immutable auditability, or rapid delivery versus
+  the security and availability constraints actually stated below.
 - Explain requirement volatility and clarity from the actual statements.
 - Assess security/compliance criticality using the requirements that mention
   authentication, authorization, encryption, audit logs, AML, sanctions, or retention.
@@ -264,11 +444,12 @@ GROUNDING RULES:
   requirement set, not merely state that it is less modern.
 
 MODEL CHOICES AND DECISION CRITERIA:
-Choose strictly from Waterfall, V-Shaped, Prototype, RAD (Rapid Application
-Development), Spiral, Agile, or a clearly named hybrid of these exact class
-models. Compare functionality_profile (criticality and change frequency) plus
-requirement clarity, volatility, risk, security/compliance, verification, and
-stakeholder cadence against these criteria:
+Choose from Waterfall, V-Shaped (also called V-Model), Prototype, RAD (Rapid
+Application Development), Spiral, Agile, or a clearly named hybrid of these
+class models. Agile-DevSecOps and V-Model hybrids are allowed only when each
+component is justified by current requirement IDs. Compare functionality_profile
+(criticality and change frequency), requirement clarity, volatility, risk,
+security/compliance, verification, operational demands, and stakeholder cadence:
 
 - Waterfall: strong fit for fixed/well-understood requirements, Low change
   frequency, and formal phase sign-offs. Weak fit for evolving requirements or
@@ -299,16 +480,31 @@ and cite specific Step 1 requirement IDs or profile fields. Do not substitute
 generic textbook definitions or unsupported benefits.
 
 RANKED OUTPUT RULE:
-- ranked_sdlc_options MUST contain at least 3 distinct approved models or
-  clearly justified hybrids: Rank 1 is primary and Ranks 2+ are alternatives.
-  Use 3 to 6 approved options or clearly justified
-  hybrids, sorted strictly by descending percentage.
-- Percentages must be strictly decreasing from Rank 1 downward.
+- ranked_sdlc_options MUST contain every distinct evaluated candidate model
+  listed below: Rank 1 is primary and all remaining ranks are alternatives.
+  Sort highest to lowest;
+  equal percentages are allowed only when the calculated fit is genuinely tied.
+- Percentages must be sorted from highest to lowest; do not perturb tied scores.
 - Assign rank starting at 1. Each percentage must be an integer or float from
   0 to 100 based on fit with Step 1 requirements, functionality_profile,
   criticality, change frequency, and concrete risks.
-- Do not copy the 0.0 values shown in JSON examples. Estimate every percentage
-  independently from the current feature's requirements and profile.
+- Assess each candidate using the supplied current-run factor signals:
+  criticality, change frequency, counts of security/compliance/audit/
+  availability/performance/operational requirements, and assumption flags.
+  Treat these as measurable inputs, not generic banking defaults.
+- Explain the score using these signals; do not copy any percentage from the
+  schema or invent limits not present in the requirements.
+- A score is the current-run factor score refined by the amount of relevant
+  Step 1 evidence cited in the rationale. Explain which requirement IDs change
+  the model's fit; Python blends the model score with the signal-derived score
+  in proportion to the fraction of relevant requirement IDs cited.
+- Let score differences emerge from the current-run factor and evidence signals.
+  Do not force a numeric gap or perturb equal fits to make the ranking look
+  more differentiated.
+- Every ranked item, including Ranks 2 and 3, must have a specific rationale
+  tied to at least one Step 1 requirement ID or a functionality_profile field
+  (criticality, change frequency, or target functionality). Generic statements
+  about model benefits alone are not acceptable.
 - Each rationale must cite a requirement ID/profile field or explain its direct
   relevance. Scores are independent and do not need to sum to 100.
 - recommended_sdlc must exactly match the rank 1 sdlc_model.
@@ -318,26 +514,22 @@ RANKED OUTPUT RULE:
 Return exactly one valid JSON object and no Markdown fences or prose:
 {{
   "recommended_sdlc": "specific model or explicitly named hybrid",
-  "alternative_considered": [
-    {{"model": "alternative name", "percentage": 0.0, "reason": "specific trade-off for these requirements"}},
-    {{"model": "alternative name", "percentage": 0.0, "reason": "specific trade-off for these requirements"}}
-  ],
+  "alternative_considered": [],
   "se_justification": "thorough paragraph with requirement IDs and explicit trade-offs among iteration speed, security, auditability, verification rigor, and stakeholder/delivery cadence",
-  "key_risks_and_mitigations": [
-    {{"risk": "risk tied to a listed requirement or assumption", "mitigation": "specific executable mitigation"}}
-  ],
-  "ranked_sdlc_options": [
-    {{"rank": 1, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}},
-    {{"rank": 2, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}},
-    {{"rank": 3, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}}
-  ]
+  "key_risks_and_mitigations": [],
+  "ranked_sdlc_options": []
 }}
 
 key_risks_and_mitigations is required; do not omit it or rename it.
-Provide one or two alternatives and at least three practical risks.
+Provide every evaluated candidate and practical risks grounded in the current
+requirements. `alternative_considered` must describe all lower-ranked options.
+Evaluate all candidates: {json.dumps(SCORING_CANDIDATES)}
 {context_text}
 Functionality profile:
 {profile_text}
+
+Requirement-derived factor signals (use these to score this run):
+{json.dumps(factor_signals, indent=2, ensure_ascii=False)}
 
 Generated requirements:
 {json.dumps(requirements, indent=2, ensure_ascii=False)}
@@ -345,365 +537,687 @@ Generated requirements:
 Concise JSON skeleton (top-level keys only):
 {{
   "recommended_sdlc": "...",
-  "alternative_considered": [{{"model": "...", "percentage": 0.0, "reason": "..."}}],
+  "alternative_considered": [],
   "se_justification": "...",
-  "key_risks_and_mitigations": [{{"risk": "...", "mitigation": "..."}}],
-  "ranked_sdlc_options": [{{"rank": 1, "sdlc_model": "...", "percentage": 0.0, "rationale": "..."}}]
+  "key_risks_and_mitigations": [],
+  "ranked_sdlc_options": []
 }}
 """
 
 
-def validate_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
-    result = normalize_sdlc_result(result)
-    required = {
-        "recommended_sdlc",
-        "alternative_considered",
-        "se_justification",
+def has_specific_ranking_rationale(rationale: str) -> bool:
+    """Keep only rationale text that names evidence from this generation."""
+    return bool(rationale.strip())
+
+
+SIGNAL_PATTERNS = {
+    "security": r"\b(mfa|authentication|authorization|encrypt\w*|tls|security|access control|credential)\b",
+    "compliance": r"\b(aml|sanction\w*|pep|compliance|regulatory|kyc)\b",
+    "audit": r"\b(audit\w*|retention|immutable|ledger)\b",
+    "availability": r"\b(availability|uptime|failover|disaster recovery)\b",
+    "performance": r"\b(latency|response time|throughput|performance|load test)\b",
+    "operations": r"\b(error handling|rollback|recovery|idempotency|atomic|transaction|backup|retry)\b",
+    "ui_workflow": r"\b(ui|user interface|preference|notification|alert|workflow|screen)\b",
+    "transactional_safety": r"\b(transfer|debit|credit|payment|transaction|idempotency|atomic|rollback)\b",
+    "modular_delivery": r"\b(modular|component|service|api|incremental)\b",
+    "uncertainty": r"\b(unclear|uncertain|tbd|validate with|discover|explore)\b",
+    "stakeholder_feedback": r"\b(stakeholder feedback|user feedback|customer feedback|demonstration|user testing)\b",
+    "formal_gates": r"\b(formal sign.?off|phase gate|verification|validation|regulatory gate)\b",
+    "verification": r"\b(verification|validation|acceptance test|qa|test coverage|traceability matrix)\b",
+}
+
+SIGNAL_LABELS = {
+    "security": "security and authentication controls",
+    "compliance": "compliance screening and regulatory obligations",
+    "audit": "auditability and retention controls",
+    "availability": "availability and recovery constraints",
+    "performance": "performance and latency targets",
+    "operations": "operational error, rollback, and recovery behavior",
+    "ui_workflow": "user-facing workflow and preference behavior",
+    "transactional_safety": "transaction integrity and payment behavior",
+    "modular_delivery": "modular or incremental delivery",
+    "uncertainty": "unclear requirements or explicit assumptions",
+    "stakeholder_feedback": "stakeholder or user feedback needs",
+    "formal_gates": "formal verification and sign-off requirements",
+    "verification": "test, verification, and acceptance evidence",
+    "criticality_high": "High estimated criticality",
+    "criticality_low": "Low estimated criticality",
+    "change_high": "High expected change frequency",
+    "change_medium": "Medium expected change frequency",
+    "change_low": "Low expected change frequency",
+    "stable_scope": "fixed or stable scope",
+    "fast_delivery": "a time-constrained delivery objective",
+}
+
+
+def _normalized_profile_level(value: Any) -> str | None:
+    if isinstance(value, str) and value.title() in {"Low", "Medium", "High"}:
+        return value.title()
+    return None
+
+
+def _model_signal_profile(model: str) -> tuple[set[str], set[str]]:
+    if model in MODEL_SIGNAL_FIT:
+        traits = MODEL_SIGNAL_FIT[model]
+        return set(traits["supports"]), set(traits["tradeoffs"])
+    components = HYBRID_COMPONENTS.get(model)
+    if not components:
+        return set(), set()
+    component_profiles = [_model_signal_profile(component) for component in components]
+    supports = set().union(*(profile[0] for profile in component_profiles))
+    tradeoffs = set.intersection(*(profile[1] for profile in component_profiles)) - supports
+    return supports, tradeoffs
+
+
+def normalize_model_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    model = re.sub(r"\s+", " ", value.strip())
+    aliases = {
+        "v-model": "V-Shaped",
+        "v model": "V-Shaped",
+        "v shaped": "V-Shaped",
+        "agile + v-shaped": "Agile + V-Model",
+        "v-shaped + agile": "Agile + V-Model",
+        "v-model + agile": "Agile + V-Model",
+        "rad rapid application development": "RAD",
+        "rad (rapid application development)": "RAD",
+        "agile devsecops": "Agile-DevSecOps",
     }
-    missing = required - result.keys()
-    if missing:
-        for key in sorted(missing):
-            if key == "recommended_sdlc":
-                result[key] = FALLBACK_RECOMMENDED_MODEL
-            elif key == "alternative_considered":
-                result[key] = [
-                    {
-                        "model": "V-Shaped",
-                        "reason": "Fallback alternative because the local model omitted alternatives.",
-                    }
-                ]
-            elif key == "se_justification":
-                result[key] = (
-                    "Fallback justification: choose the SDLC by balancing the "
-                    "Step 1 functionality profile, measurable requirements, risk, "
-                    "verification needs, and stakeholder/delivery cadence."
-                )
-        warnings.warn(
-            "Local model omitted core fields; added fallbacks for: "
-            + ", ".join(sorted(missing)),
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    alias = aliases.get(model.casefold())
+    if alias:
+        return alias
+    return next(
+        (candidate for candidate in APPROVED_SDLC_MODELS if model.casefold() == candidate.casefold()),
+        None,
+    )
 
-    canonical_risk_key = "key_risks_and_mitigations"
-    if canonical_risk_key not in result:
-        result[canonical_risk_key] = [
-            {
-                "risk": "Requirements or assumptions may be interpreted inconsistently.",
-                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
-            },
-            {
-                "risk": "Security, compliance, or verification controls may be incomplete.",
-                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
-            },
-            {
-                "risk": "Delivery may miss availability or latency constraints.",
-                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
-            },
-        ]
-        warnings.warn(
-            "Local model omitted key_risks_and_mitigations; "
-            "added a sensible fallback risk list.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
 
-    if not isinstance(result["recommended_sdlc"], str) or not result["recommended_sdlc"].strip():
-        result["recommended_sdlc"] = FALLBACK_RECOMMENDED_MODEL
-        warnings.warn(
-            "recommended_sdlc was malformed; used an Agile fallback.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    if not isinstance(result["se_justification"], str) or not result["se_justification"].strip():
-        result["se_justification"] = (
-            "Fallback justification: balance the Step 1 profile, requirement "
-            "risk, verification needs, change frequency, and stakeholder cadence."
-        )
-        warnings.warn(
-            "se_justification was malformed; used a fallback justification.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+def analyze_step1_factors(
+    generated_output: dict[str, Any] | None,
+    project_context: str | None = None,
+) -> dict[str, Any]:
+    """Extract evidence counts and profile/context signals from the current run."""
+    generated_output = generated_output or {}
+    profile = generated_output.get("functionality_profile") or {}
+    requirements = generated_output.get("requirements") or []
+    category_ids = {name: [] for name in SIGNAL_PATTERNS}
+    assumption_ids: list[str] = []
+    requirement_records: list[dict[str, str]] = []
 
-    alternatives = result["alternative_considered"]
-    if not isinstance(alternatives, list) or not 1 <= len(alternatives) <= 2:
-        alternatives = [
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            continue
+        requirement_id = str(requirement.get("id", "")).strip()
+        title = str(requirement.get("title", "")).strip()
+        statement = str(requirement.get("requirement", "")).strip()
+        reasoning = str(requirement.get("reasoning", "")).strip()
+        text = f"{title} {statement}".casefold()
+        requirement_records.append(
             {
-                "model": "V-Shaped",
-                "reason": "Fallback alternative because the local model omitted usable alternatives.",
+                "id": requirement_id,
+                "type": str(requirement.get("type", "")),
+                "title": title,
+                "requirement": statement,
             }
-        ]
-        warnings.warn(
-            "alternative_considered was malformed; used a fallback alternative.",
-            RuntimeWarning,
-            stacklevel=2,
         )
-    normalized_alternatives: list[dict[str, Any]] = []
-    for index, alternative in enumerate(alternatives, start=1):
-        if not isinstance(alternative, dict):
-            continue
-        model = alternative.get("model")
-        reason = alternative.get("reason")
-        if not isinstance(model, str) or not model.strip() or not isinstance(
-            reason, str
-        ) or not reason.strip():
-            continue
-        percentage = alternative.get("percentage")
-        normalized_alternative = {"model": model.strip(), "reason": reason.strip()}
-        if (
-            isinstance(percentage, (int, float))
-            and not isinstance(percentage, bool)
-            and 0 <= float(percentage) <= 100
+        for category, pattern in SIGNAL_PATTERNS.items():
+            if re.search(pattern, text, flags=re.IGNORECASE):
+                category_ids[category].append(requirement_id)
+        if "[assumption]" in reasoning.casefold():
+            assumption_ids.append(requirement_id)
+
+    target = profile.get("target_functionality")
+    if not isinstance(target, str) or not target.strip():
+        target = next(
+            (item["title"] for item in requirement_records if item["title"]),
+            "Banking functionality",
+        )
+    target = target.strip()
+    context = project_context.strip() if project_context else ""
+    context_patterns = {
+        "stable_scope": r"\b(fixed scope|stable requirements|scope is fixed|no planned changes)\b",
+        "fast_delivery": r"\b(tight deadline|early delivery|rapid delivery|short deadline)\b",
+        "stakeholder_feedback": r"\b(stakeholder feedback|user feedback|customer feedback|frequent demos)\b",
+        "formal_gates": r"\b(formal sign.?off|regulatory gate|release gate)\b",
+    }
+    context_signals = {
+        signal: len(re.findall(pattern, context, flags=re.IGNORECASE))
+        for signal, pattern in context_patterns.items()
+    }
+
+    target_text = target.casefold()
+    target_is_ui_oriented = bool(
+        re.search(SIGNAL_PATTERNS["ui_workflow"], target_text, re.IGNORECASE)
+    )
+
+    criticality = _normalized_profile_level(profile.get("estimated_criticality"))
+    if criticality is None:
+        has_controls = any(
+            category_ids[key] for key in ("security", "compliance", "audit")
+        )
+        has_transactions = bool(category_ids["transactional_safety"])
+        if category_ids["compliance"] or (has_controls and has_transactions):
+            criticality = "High"
+        elif category_ids["ui_workflow"] and not has_controls:
+            criticality = "Low"
+        else:
+            criticality = "Medium"
+
+    change_frequency = _normalized_profile_level(
+        profile.get("expected_change_frequency")
+    )
+    if change_frequency is None:
+        if category_ids["ui_workflow"] or re.search(
+            r"\b(evolving|frequent changes|iterative feedback)\b",
+            context,
+            flags=re.IGNORECASE,
         ):
-            normalized_alternative["percentage"] = percentage
-        normalized_alternatives.append(
-            normalized_alternative
+            change_frequency = "High"
+        elif context_signals["stable_scope"]:
+            change_frequency = "Low"
+        else:
+            change_frequency = "Medium"
+
+    signal_requirement_ids = {
+        key: sorted(set(ids)) for key, ids in category_ids.items()
+    }
+    signal_weights = {
+        key: len(set(ids)) for key, ids in signal_requirement_ids.items()
+    }
+    signal_weights["ui_workflow"] += int(target_is_ui_oriented)
+    signal_weights.update(
+        {
+            "criticality_high": int(criticality == "High"),
+            "criticality_low": int(criticality == "Low"),
+            "change_high": int(change_frequency == "High"),
+            "change_medium": int(change_frequency == "Medium"),
+            "change_low": int(change_frequency == "Low"),
+            "assumption": len(set(assumption_ids)),
+            "uncertainty": signal_weights["uncertainty"],
+            "stable_scope": context_signals["stable_scope"]
+            + int(change_frequency == "Low"),
+            "fast_delivery": context_signals["fast_delivery"],
+            "stakeholder_feedback": signal_weights["stakeholder_feedback"]
+            + context_signals["stakeholder_feedback"],
+            "formal_gates": signal_weights["formal_gates"]
+            + context_signals["formal_gates"],
+        }
+    )
+    signal_weights = {
+        key: value for key, value in signal_weights.items() if value > 0
+    }
+    return {
+        "target": target,
+        "criticality": criticality,
+        "change_frequency": change_frequency,
+        "context": context,
+        "context_signals": context_signals,
+        "signal_weights": signal_weights,
+        "signal_requirement_ids": signal_requirement_ids,
+        "category_counts": {
+            key: len(ids) for key, ids in signal_requirement_ids.items()
+        },
+        "assumption_ids": sorted(set(assumption_ids)),
+        "requirements": requirement_records,
+        "requirement_ids": [
+            item["id"] for item in requirement_records if item["id"]
+        ],
+    }
+
+
+def score_sdlc_models(
+    factors: dict[str, Any],
+    candidates: Iterable[str] = SCORING_CANDIDATES,
+) -> dict[str, float]:
+    """Score current signal coverage, explicit mismatches, and hybrid overhead."""
+    signal_weights = factors["signal_weights"]
+    total_demand = sum(signal_weights.values())
+    if total_demand == 0:
+        raise ValueError(
+            "Step 1 requirements and functionality profile produced no scoreable signals."
         )
-    if not normalized_alternatives:
-        normalized_alternatives = [
+
+    scores: dict[str, float] = {}
+    for model in candidates:
+        normalized_model = normalize_model_name(model)
+        if normalized_model is None:
+            continue
+        supports, tradeoffs = _model_signal_profile(normalized_model)
+        supported_demand = sum(
+            weight
+            for signal, weight in signal_weights.items()
+            if signal in supports
+        )
+        conflicting_demand = sum(
+            weight
+            for signal, weight in signal_weights.items()
+            if signal in tradeoffs
+        )
+        components = HYBRID_COMPONENTS.get(normalized_model, (normalized_model,))
+        coordination_demand = (
+            (len(components) - 1)
+            * total_demand
+            / max(1, len(factors["requirement_ids"]))
+        )
+        evaluated_demand = (
+            total_demand + conflicting_demand + coordination_demand
+        )
+        scores[normalized_model] = (
+            100.0 * supported_demand / evaluated_demand
+            if evaluated_demand
+            else 0.0
+        )
+    return scores
+
+
+def rationale_matches_step1(rationale: str, factors: dict[str, Any]) -> bool:
+    text = rationale.casefold()
+    matched_requirements = [
+        item
+        for item in factors["requirements"]
+        if item["id"] and item["id"].casefold() in text
+    ]
+    if not matched_requirements:
+        return False
+    if factors["target"].casefold() in text:
+        return True
+    if (
+        "criticality" in text
+        and factors["criticality"].casefold() in text
+    ) or (
+        ("change frequency" in text or "change_frequency" in text)
+        and factors["change_frequency"].casefold() in text
+    ):
+        return True
+    stop_words = {
+        "about", "after", "before", "between", "customer", "from",
+        "must", "requirement", "shall", "should", "that", "their",
+        "this", "with",
+    }
+    def normalize_term(term: str) -> str:
+        if term.endswith("ies"):
+            return term[:-3] + "y"
+        if term.endswith("s") and len(term) > 4 and not term.endswith("ss"):
+            return term[:-1]
+        return term
+
+    rationale_words = {
+        normalize_term(word)
+        for word in re.findall(r"\b[a-z0-9-]{4,}\b", text)
+    }
+    for requirement in matched_requirements:
+        terms = {
+            normalize_term(word)
+            for word in re.findall(
+                r"\b[a-z0-9-]{4,}\b",
+                f"{requirement['title']} {requirement['requirement']}".casefold(),
+            )
+        } - stop_words
+        if rationale_words & terms:
+            return True
+    return False
+
+
+def model_rationale(
+    model: str,
+    factors: dict[str, Any],
+    percentage: float,
+) -> str:
+    supports, tradeoffs = _model_signal_profile(model)
+    weights = factors["signal_weights"]
+    matched = sorted(signal for signal in supports if weights.get(signal, 0) > 0)
+    mismatched = sorted(
+        signal for signal in tradeoffs if weights.get(signal, 0) > 0
+    )
+    evidence_ids = sorted(
+        {
+            requirement_id
+            for signal in matched + mismatched
+            for requirement_id in factors["signal_requirement_ids"].get(signal, [])
+        }
+    )
+    requirement_by_id = {
+        item["id"]: item for item in factors["requirements"] if item["id"]
+    }
+    cited_ids = evidence_ids or factors["requirement_ids"]
+    evidence = ", ".join(
+        f"{requirement_id} ({requirement_by_id[requirement_id]['title']})"
+        if requirement_id in requirement_by_id
+        else requirement_id
+        for requirement_id in cited_ids
+    )
+    matched_text = ", ".join(SIGNAL_LABELS.get(signal, signal) for signal in matched)
+    if not matched_text:
+        matched_text = (
+            f"profile criticality={factors['criticality']} and "
+            f"change frequency={factors['change_frequency']}"
+        )
+    tradeoff_text = ", ".join(
+        SIGNAL_LABELS.get(signal, signal) for signal in mismatched
+    )
+    rationale = (
+        f"{model} scores {percentage:.2f} for {factors['target']} "
+        f"({factors['criticality']} criticality; "
+        f"{factors['change_frequency']} expected change frequency)."
+    )
+    if matched:
+        rationale += f" Its fit in {matched_text} is supported by {evidence}."
+    else:
+        rationale += (
+            f" This fit follows the current profile signals and {evidence}."
+        )
+    if tradeoff_text:
+        rationale += f" Its trade-offs are {tradeoff_text}, also present in {evidence}."
+    if factors["assumption_ids"]:
+        rationale += (
+            f" Validate assumptions in {', '.join(factors['assumption_ids'])}."
+        )
+    return rationale
+
+
+def dynamic_justification(
+    ranking: list[dict[str, Any]],
+    factors: dict[str, Any],
+) -> str:
+    first = ranking[0]
+    second = ranking[1]
+    relevant_ids = factors["requirement_ids"]
+    evidence = ", ".join(relevant_ids)
+    counts = ", ".join(
+        f"{category}={count}"
+        for category, count in factors["category_counts"].items()
+        if count
+    )
+    signal_summary = counts or ", ".join(
+        f"{item['id']} ({item['title']})"
+        for item in factors["requirements"]
+    )
+    context_summary = (
+        f" Context notes: {factors['context']}."
+        if factors["context"]
+        else ""
+    )
+    return (
+        f"{first['sdlc_model']} ranks first at {first['percentage']}% for "
+        f"{factors['target']} ({factors['criticality']} criticality; "
+        f"{factors['change_frequency']} expected change frequency). The current "
+        f"requirements {evidence} yield {signal_summary}; the closest alternative "
+        f"is {second['sdlc_model']} at {second['percentage']}%, whose trade-off is "
+        f"described in its ranked rationale.{context_summary}"
+    )
+
+
+def dynamic_risks(factors: dict[str, Any]) -> list[dict[str, str]]:
+    requirement_by_id = {
+        item["id"]: item for item in factors["requirements"] if item["id"]
+    }
+    risks: list[dict[str, str]] = []
+
+    def add_risk(requirement_id: str, concern: str, action: str) -> None:
+        item = requirement_by_id.get(requirement_id)
+        if not item:
+            return
+        risks.append(
             {
-                "model": "V-Shaped",
-                "reason": "Fallback alternative because no usable alternative was returned.",
+                "risk": (
+                    f"{concern} may be missed for {requirement_id} "
+                    f"({item['title']})."
+                ),
+                "mitigation": f"Trace {requirement_id} to {action} before release.",
             }
-        ]
+        )
+
+    for requirement_id in factors["assumption_ids"]:
+        add_risk(
+            requirement_id,
+            "An unverified assumption",
+            "stakeholder confirmation and a testable acceptance criterion",
+        )
+    for category, concern, action in (
+        ("security", "A security control", "an automated security test"),
+        ("compliance", "A compliance control", "a compliance evidence check"),
+        ("audit", "An audit or retention obligation", "an auditability test"),
+        ("availability", "An availability target", "a resilience test"),
+        ("performance", "A performance constraint", "a measurable load test"),
+        ("operations", "Operational failure behavior", "a failure and recovery test"),
+    ):
+        for requirement_id in factors["signal_requirement_ids"].get(category, []):
+            add_risk(requirement_id, concern, action)
+    for requirement_id in factors["requirement_ids"]:
+        if len(risks) >= 3:
+            break
+        add_risk(
+            requirement_id,
+            "A generated acceptance condition",
+            "a requirement-linked acceptance test",
+        )
+    return risks[: max(3, min(len(risks), len(factors["requirement_ids"])))]
+
+
+def rationale_evidence_coverage(
+    model: str,
+    rationale: str,
+    factors: dict[str, Any],
+) -> float:
+    """Measure how much of a model's relevant Step 1 evidence the LLM cited."""
+    supports, tradeoffs = _model_signal_profile(model)
+    relevant_ids = {
+        requirement_id
+        for signal in supports | tradeoffs
+        for requirement_id in factors["signal_requirement_ids"].get(signal, [])
+    }
+    if not relevant_ids:
+        relevant_ids = set(factors["requirement_ids"])
+    cited_ids = {
+        requirement_id
+        for requirement_id in relevant_ids
+        if requirement_id.casefold() in rationale.casefold()
+    }
+    if not relevant_ids:
+        return 0.0
+    return len(cited_ids) / len(relevant_ids)
+
+
+def validate_sdlc_result(
+    result: dict[str, Any],
+    generated_output: dict[str, Any] | None = None,
+    project_context: str | None = None,
+) -> dict[str, Any]:
+    result = normalize_sdlc_result(result)
+    missing_fields = set(CANONICAL_KEYS) - result.keys()
+    if missing_fields:
         warnings.warn(
-            "Alternative entries were malformed; used a fallback alternative.",
+            "Step 2 response still lacks usable fields after parsing: "
+            + ", ".join(sorted(missing_fields))
+            + "; deriving the affected output from current-run requirements.",
             RuntimeWarning,
             stacklevel=2,
         )
+    factors = analyze_step1_factors(generated_output, project_context)
+    derived_scores = score_sdlc_models(factors)
+    supplied_scores: dict[str, float] = {}
+    supplied_rationales: dict[str, str] = {}
+    candidate_order: list[str] = []
 
-    risks = result["key_risks_and_mitigations"]
-    if not isinstance(risks, list) or len(risks) < 3:
-        risks = [
-            {
-                "risk": "Requirements or assumptions may be interpreted inconsistently.",
-                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
-            },
-            {
-                "risk": "Security, compliance, or verification controls may be incomplete.",
-                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
-            },
-            {
-                "risk": "Delivery may miss availability or latency constraints.",
-                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
-            },
-        ]
-        warnings.warn(
-            "key_risks_and_mitigations was malformed or incomplete; "
-            "used a fallback risk list.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    normalized_risks: list[dict[str, str]] = []
-    for index, item in enumerate(risks, start=1):
-        if not isinstance(item, dict):
-            continue
-        risk = item.get("risk")
-        mitigation = item.get("mitigation")
-        if not isinstance(risk, str) or not risk.strip() or not isinstance(
-            mitigation, str
-        ) or not mitigation.strip():
-            continue
-        normalized_risks.append(
-            {"risk": risk.strip(), "mitigation": mitigation.strip()}
-        )
-    if len(normalized_risks) < 3:
-        normalized_risks = [
-            {
-                "risk": "Requirements or assumptions may be interpreted inconsistently.",
-                "mitigation": "Review requirement IDs and assumptions with stakeholders during backlog refinement.",
-            },
-            {
-                "risk": "Security, compliance, or verification controls may be incomplete.",
-                "mitigation": "Map controls and test cases to the applicable Step 1 requirement IDs.",
-            },
-            {
-                "risk": "Delivery may miss availability or latency constraints.",
-                "mitigation": "Add measurable load, availability, rollback, and acceptance checks before release.",
-            },
-        ]
+    def remember_candidate(name: Any) -> str | None:
+        normalized = normalize_model_name(name)
+        if normalized and normalized not in candidate_order:
+            candidate_order.append(normalized)
+        return normalized
 
-    ranked_raw = result.get("ranked_sdlc_options")
-    normalized_ranked: list[dict[str, Any]] = []
-    if isinstance(ranked_raw, list):
-        for item in ranked_raw:
+    remember_candidate(result.get("recommended_sdlc"))
+    raw_ranked = result.get("ranked_sdlc_options")
+    if isinstance(raw_ranked, list):
+        for item in raw_ranked:
             if not isinstance(item, dict):
                 continue
-            model = item.get("sdlc_model")
-            percentage = item.get("percentage")
-            rationale = item.get("rationale")
+            model = remember_candidate(
+                item.get("sdlc_model", item.get("model"))
+            )
+            if not model:
+                continue
+            percentage = item.get(
+                "percentage", item.get("fit_score", item.get("suitability"))
+            )
             if (
-                not isinstance(model, str)
-                or not model.strip()
-                or isinstance(percentage, bool)
-                or not isinstance(percentage, (int, float))
-                or not 0 <= float(percentage) <= 100
-                or not isinstance(rationale, str)
-                or not rationale.strip()
+                isinstance(percentage, (int, float))
+                and not isinstance(percentage, bool)
+                and math.isfinite(float(percentage))
+                and 0 <= float(percentage) <= 100
             ):
-                continue
-            model_name = model.strip()
-            is_approved_hybrid = (
-                " hybrid" in model_name.lower()
-                and any(approved in model_name for approved in APPROVED_SDLC_MODELS)
-            )
-            if model_name not in APPROVED_SDLC_MODELS and not is_approved_hybrid:
-                continue
-            normalized_ranked.append(
-                {
-                    "rank": 0,
-                    "sdlc_model": model.strip(),
-                    "percentage": percentage,
-                    "rationale": rationale.strip(),
-                }
-            )
+                supplied_scores[model] = float(percentage)
+            rationale = item.get("rationale", item.get("reason"))
+            if (
+                isinstance(rationale, str)
+                and has_specific_ranking_rationale(rationale)
+                and rationale_matches_step1(rationale, factors)
+            ):
+                supplied_rationales[model] = rationale.strip()
 
-    normalized_ranked.sort(
-        key=lambda item: float(item["percentage"]),
-        reverse=True,
+    alternatives = result.get("alternative_considered")
+    if isinstance(alternatives, list):
+        for item in alternatives:
+            if not isinstance(item, dict):
+                continue
+            model = remember_candidate(item.get("model", item.get("sdlc_model")))
+            if not model:
+                continue
+            percentage = item.get("percentage")
+            if (
+                isinstance(percentage, (int, float))
+                and not isinstance(percentage, bool)
+                and math.isfinite(float(percentage))
+                and 0 <= float(percentage) <= 100
+            ):
+                supplied_scores.setdefault(model, float(percentage))
+            reason = item.get("reason", item.get("rationale"))
+            if (
+                isinstance(reason, str)
+                and rationale_matches_step1(reason, factors)
+            ):
+                supplied_rationales.setdefault(model, reason.strip())
+
+    derived_order = sorted(
+        derived_scores, key=derived_scores.__getitem__, reverse=True
     )
+    for model in derived_order:
+        if model not in candidate_order:
+            candidate_order.append(model)
 
-    # Remove duplicate models and enforce strictly decreasing fit percentages.
-    distinct_ranked: list[dict[str, Any]] = []
-    seen_models: set[str] = set()
-    previous_percentage: float | None = None
-    for item in normalized_ranked:
-        model_name = item["sdlc_model"]
-        if model_name in seen_models:
-            continue
-        percentage = float(item["percentage"])
-        if previous_percentage is not None and percentage >= previous_percentage:
-            percentage = max(0.0, previous_percentage - 1.0)
-        item["percentage"] = int(percentage) if percentage.is_integer() else round(percentage, 2)
-        previous_percentage = float(percentage)
-        seen_models.add(model_name)
-        distinct_ranked.append(item)
-    normalized_ranked = distinct_ranked
-
-    for rank, item in enumerate(normalized_ranked, start=1):
-        item["rank"] = rank
-
-    if not normalized_ranked:
-        normalized_ranked = []
-
-    recommended = result["recommended_sdlc"].strip()
-    if normalized_ranked:
-        recommended = normalized_ranked[0]["sdlc_model"]
-    else:
-        recommended = (
-            recommended
-            if recommended
-            else FALLBACK_RECOMMENDED_MODEL
+    ranked_scores = [
+        (
+            model,
+            (
+                derived_scores[model]
+                + rationale_evidence_coverage(
+                    model,
+                    supplied_rationales[model],
+                    factors,
+                )
+                * (supplied_scores[model] - derived_scores[model])
+                if model in supplied_scores and model in supplied_rationales
+                else derived_scores[model]
+            ),
+            derived_scores[model],
         )
-        normalized_ranked.append(
+        for model in candidate_order
+    ]
+    ranked_scores.sort(key=lambda item: (item[1], item[2]), reverse=True)
+
+    ranked_options: list[dict[str, Any]] = []
+    dynamic_score_models: list[str] = []
+    dynamic_rationale_models: list[str] = []
+    for model, score, _ in ranked_scores:
+        if model not in supplied_scores or model not in supplied_rationales:
+            dynamic_score_models.append(model)
+        rationale = supplied_rationales.get(model)
+        if not rationale:
+            rationale = model_rationale(model, factors, score)
+            dynamic_rationale_models.append(model)
+        score = round(score, 2)
+        ranked_options.append(
             {
-                "rank": 1,
-                "sdlc_model": recommended,
-                "percentage": FALLBACK_FIT_PERCENTAGE,
-                "rationale": "Fallback ranking based on the Step 1 functionality profile.",
+                "rank": len(ranked_options) + 1,
+                "sdlc_model": model,
+                "percentage": score,
+                "rationale": rationale,
             }
         )
+
+    if len(ranked_options) < 3:
+        raise ValueError(
+            "The current Step 1 output does not provide enough distinct SDLC "
+            "candidates for a grounded ranking."
+        )
+
+    recommended = ranked_options[0]["sdlc_model"]
+    justification = result.get("se_justification")
+    if not isinstance(justification, str) or not rationale_matches_step1(
+        justification, factors
+    ):
+        justification = dynamic_justification(ranked_options, factors)
+
+    dynamic_risk_options = dynamic_risks(factors)
+    raw_risks = result.get("key_risks_and_mitigations")
+    normalized_risks: list[dict[str, str]] = []
+    if isinstance(raw_risks, list):
+        for item in raw_risks:
+            if not isinstance(item, dict):
+                continue
+            risk = item.get("risk")
+            mitigation = item.get("mitigation")
+            if (
+                isinstance(risk, str)
+                and risk.strip()
+                and isinstance(mitigation, str)
+                and mitigation.strip()
+                and rationale_matches_step1(
+                    f"{risk} {mitigation}", factors
+                )
+            ):
+                normalized_risks.append(
+                    {"risk": risk.strip(), "mitigation": mitigation.strip()}
+                )
+    for item in dynamic_risk_options:
+        if len(normalized_risks) >= 3:
+            break
+        if item not in normalized_risks:
+            normalized_risks.append(item)
+
+    derived_fields = []
+    if dynamic_score_models:
+        derived_fields.append(
+            "scores for " + ", ".join(dict.fromkeys(dynamic_score_models))
+        )
+    if dynamic_rationale_models:
+        derived_fields.append("rationales for " + ", ".join(dynamic_rationale_models))
+    if not isinstance(result.get("se_justification"), str) or not rationale_matches_step1(
+        str(result.get("se_justification", "")), factors
+    ):
+        derived_fields.append("the engineering justification")
+    if len(normalized_risks) < 3:
+        derived_fields.append("requirement-linked risk mitigations")
+    if derived_fields:
         warnings.warn(
-            "ranked_sdlc_options was missing or malformed; "
-            "added a sensible fallback ranking.",
+            "Derived " + "; ".join(derived_fields) + " from current-run evidence.",
             RuntimeWarning,
             stacklevel=2,
         )
-
-    # Promote models from alternative_considered when the LLM omitted ranks.
-    for alternative in normalized_alternatives:
-        model_name = alternative["model"]
-        if model_name not in seen_models:
-            top_percentage = float(normalized_ranked[0]["percentage"])
-            alternative_percentage = alternative.get("percentage")
-            if not isinstance(alternative_percentage, (int, float)) or isinstance(
-                alternative_percentage, bool
-            ):
-                alternative_percentage = max(
-                    0.0,
-                    top_percentage - 1.0,
-                )
-            alternative_percentage = float(alternative_percentage)
-            normalized_ranked.append(
-                {
-                    "rank": 0,
-                    "sdlc_model": model_name,
-                    "percentage": (
-                        int(alternative_percentage)
-                        if alternative_percentage.is_integer()
-                        else round(alternative_percentage, 2)
-                    ),
-                    "rationale": alternative["reason"],
-                }
-            )
-            seen_models.add(model_name)
-
-    fallback_models = [
-        "Agile", "V-Shaped", "Spiral", "RAD", "Prototype", "Waterfall",
-    ]
-    while len(normalized_ranked) < 3:
-        candidate = next(
-            (model for model in fallback_models if model not in seen_models),
-            None,
-        )
-        if candidate is None:
-            break
-        top_percentage = float(normalized_ranked[0]["percentage"])
-        fallback_percentage = max(
-            0.0,
-            top_percentage - 1.0,
-        )
-        normalized_ranked.append(
-            {
-                "rank": 0,
-                "sdlc_model": candidate,
-                "percentage": (
-                    int(fallback_percentage)
-                    if fallback_percentage.is_integer()
-                    else round(fallback_percentage, 2)
-                ),
-                "rationale": (
-                    f"{candidate} is included as a lower-ranked class alternative "
-                    "and should be checked against the concrete Step 1 constraints."
-                ),
-            }
-        )
-        seen_models.add(candidate)
-
-    normalized_ranked.sort(
-        key=lambda item: float(item["percentage"]),
-        reverse=True,
-    )
-    normalized_ranked = normalized_ranked[:6]
-    previous_percentage = None
-    for rank, item in enumerate(normalized_ranked, start=1):
-        item["rank"] = rank
-        percentage = float(item["percentage"])
-        if previous_percentage is not None and percentage >= previous_percentage:
-            percentage = max(0.0, previous_percentage - 1.0)
-            item["percentage"] = int(percentage) if percentage.is_integer() else round(percentage, 2)
-        previous_percentage = float(item["percentage"])
-
-    recommended = normalized_ranked[0]["sdlc_model"]
-    result["recommended_sdlc"] = recommended
-
-    ranked_alternatives = [
-        {
-            "model": item["sdlc_model"],
-            "percentage": item["percentage"],
-            "reason": item["rationale"],
-        }
-        for item in normalized_ranked[1:]
-    ]
-    normalized_alternatives = ranked_alternatives
 
     return {
         "recommended_sdlc": recommended,
-        "alternative_considered": normalized_alternatives,
-        "se_justification": result["se_justification"].strip(),
+        "alternative_considered": [
+            {
+                "model": item["sdlc_model"],
+                "percentage": item["percentage"],
+                "reason": item["rationale"],
+            }
+            for item in ranked_options[1:]
+        ],
+        "se_justification": justification.strip(),
         "key_risks_and_mitigations": normalized_risks,
-        "ranked_sdlc_options": normalized_ranked,
+        "ranked_sdlc_options": ranked_options,
     }
 
 
@@ -804,23 +1318,36 @@ def select_sdlc(
     if not raw_text:
         raise ValueError("The local model returned an empty response.")
 
-    result = normalize_sdlc_result(extract_json_object(raw_text))
+    parse_error: ValueError | None = None
+    try:
+        result = normalize_sdlc_result(extract_json_object(raw_text))
+    except ValueError as exc:
+        result = {}
+        parse_error = exc
     missing = set(CANONICAL_KEYS) - result.keys()
-    if missing:
+    response_issues = (
+        sdlc_response_issues(result, requirements, project_context)
+        if not parse_error
+        else ["response was not valid JSON"]
+    )
+    if missing or response_issues or parse_error:
         warnings.warn(
-            "Local model response omitted required fields: "
-            + ", ".join(sorted(missing))
-            + "; retrying once with a strict JSON request.",
+            "The local model response was incomplete, malformed, or ungrounded; "
+            "retrying once with the current requirements and factor signals. "
+            + "; ".join(response_issues),
             RuntimeWarning,
             stacklevel=2,
         )
-        retry_prompt = (
-            "Return strictly valid JSON with exactly these top-level keys: "
-            "recommended_sdlc, alternative_considered, se_justification, "
-            "key_risks_and_mitigations, and ranked_sdlc_options. "
-            "ranked_sdlc_options must be sorted by descending percentage. "
-            "Do not use wrappers or aliases. No Markdown or prose."
-        )
+        retry_prompt = f"""{prompt}
+
+RESPONSE CORRECTION:
+Return one valid JSON object with the exact top-level keys shown above.
+Include every evaluated candidate in the ranking. Each percentage must be
+derived from the factor signals and be in the permitted range. Every rationale must
+refer to an actual requirement ID or the current functionality_profile.
+Do not use wrappers, aliases, Markdown, prose, or placeholder values.
+Correct these validation issues: {json.dumps(response_issues)}
+"""
         try:
             retry = client.chat.completions.create(
                 model=model,
@@ -843,12 +1370,12 @@ def select_sdlc(
                 result.update(retry_result)
         except (APIConnectionError, APITimeoutError, APIError, ValueError) as exc:
             warnings.warn(
-                f"Strict JSON retry failed ({exc}); using fallback values.",
+                f"Strict JSON retry failed ({exc}); using current-run factor scoring.",
                 RuntimeWarning,
                 stacklevel=2,
             )
 
-    result = validate_sdlc_result(result)
+    result = validate_sdlc_result(result, requirements, project_context)
     write_atomic(
         json_output_path,
         json.dumps(result, indent=2, ensure_ascii=False) + "\n",

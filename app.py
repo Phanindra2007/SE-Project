@@ -53,43 +53,40 @@ def explain_error(exc: Exception) -> str:
     return f"Unexpected error: {message}"
 
 
+def format_fit(value: int | float) -> str:
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
 def render_step1(output: dict[str, Any]) -> None:
     profile = output.get("functionality_profile")
     if isinstance(profile, dict):
         st.subheader("Functionality Profile")
-        target = str(profile.get("target_functionality", "Unknown"))
+        target = str(profile["target_functionality"])
         st.markdown(f"**Target Functionality:** {target}")
 
         columns = st.columns(2)
-        columns[0].metric(
-            "Criticality", str(profile.get("estimated_criticality", "Unknown"))
-        )
-        columns[1].metric(
-            "Change Frequency",
-            str(profile.get("expected_change_frequency", "Unknown")),
-        )
+        columns[0].metric("Criticality", str(profile["estimated_criticality"]))
+        columns[1].metric("Change Frequency", str(profile["expected_change_frequency"]))
 
     requirements = output.get("requirements", [])
     st.subheader(f"Generated Requirements ({len(requirements)})")
-    if not requirements:
-        st.warning("No requirement objects were returned.")
 
     for item in requirements:
         if not isinstance(item, dict):
             continue
         with st.container(border=True):
             st.markdown(
-                f"**{item.get('id', 'Unknown ID')}** "
-                f"`{item.get('type', 'Unknown')}`"
+                f"**{item['id']}** "
+                f"`{item['type']}`"
             )
-            st.markdown(f"### {item.get('title', 'Untitled')}")
-            st.write(item.get("requirement", ""))
-            reasoning = str(item.get("reasoning", ""))
+            st.markdown(f"### {item['title']}")
+            st.write(item["requirement"])
+            reasoning = str(item["reasoning"])
             if "[Assumption]" in reasoning:
                 st.warning(reasoning)
             else:
                 st.caption(reasoning)
-            references = item.get("source_references", [])
+            references = item["source_references"]
             if isinstance(references, list) and references:
                 st.markdown("**Source references:**")
                 for reference in references:
@@ -100,67 +97,40 @@ def render_step1(output: dict[str, Any]) -> None:
 
 
 def render_step2(output: dict[str, Any]) -> None:
-    st.metric("Recommended SDLC", str(output.get("recommended_sdlc", "Unknown")))
+    st.metric("Recommended SDLC", str(output["recommended_sdlc"]))
 
     ranked_options = output.get("ranked_sdlc_options", [])
     st.subheader("Ranked SDLC Fit")
     if isinstance(ranked_options, list) and ranked_options:
         ranked_rows = [
             {
-                "Rank": option.get("rank"),
-                "SDLC Model": option.get("sdlc_model", "Unknown"),
-                "Fit": f"{option.get('percentage', 0)}%",
-                "Rationale": option.get("rationale", ""),
+                "Rank": option["rank"],
+                "SDLC Model": option["sdlc_model"],
+                "Fit": f"{format_fit(option['percentage'])}%",
+                "Rationale": option["rationale"],
             }
             for option in ranked_options
             if isinstance(option, dict)
         ]
         if ranked_rows:
+            st.caption(
+                f"Showing all {len(ranked_rows)} evaluated candidate models."
+            )
             st.dataframe(ranked_rows, use_container_width=True, hide_index=True)
-            for option in ranked_options:
-                if not isinstance(option, dict):
-                    continue
-                percentage = option.get("percentage", 0)
-                try:
-                    progress = max(0.0, min(float(percentage) / 100.0, 1.0))
-                except (TypeError, ValueError):
-                    progress = 0.0
-                st.caption(
-                    f"#{option.get('rank', '?')} "
-                    f"{option.get('sdlc_model', 'Unknown')} "
-                    f"— {option.get('percentage', 0)}%"
-                )
-                st.progress(progress)
-    else:
-        st.caption("No ranked SDLC options were returned.")
 
     st.subheader("Software Engineering Justification")
-    st.write(output.get("se_justification", "No justification was returned."))
+    st.write(output["se_justification"])
 
     st.subheader("Alternative Models Considered")
     alternatives = output.get("alternative_considered", [])
-    ranked_options = output.get("ranked_sdlc_options", [])
-    ranked_by_model = {
-        str(option.get("sdlc_model")): option
-        for option in ranked_options
-        if isinstance(option, dict)
-    }
     if isinstance(alternatives, list) and alternatives:
         for alternative in alternatives:
             if isinstance(alternative, dict):
-                model_name = str(alternative.get("model", "Unknown"))
-                percentage = alternative.get("percentage")
-                if percentage is None:
-                    ranked_match = ranked_by_model.get(model_name)
-                    if ranked_match:
-                        percentage = ranked_match.get("percentage")
-                fit_text = f" ({percentage}% fit)" if percentage is not None else ""
                 st.markdown(
-                    f"- **{model_name}{fit_text}**: "
-                    f"{alternative.get('reason', '')}"
+                    f"- **{alternative['model']} "
+                    f"({format_fit(alternative['percentage'])}% fit)**: "
+                    f"{alternative['reason']}"
                 )
-    else:
-        st.caption("No alternatives were returned.")
 
     st.subheader("Key Risks and Mitigations")
     risks = output.get("key_risks_and_mitigations", [])
@@ -168,10 +138,8 @@ def render_step2(output: dict[str, Any]) -> None:
         for item in risks:
             if isinstance(item, dict):
                 with st.container(border=True):
-                    st.markdown(f"**Risk:** {item.get('risk', '')}")
-                    st.markdown(f"**Mitigation:** {item.get('mitigation', '')}")
-    else:
-        st.caption("No risks were returned.")
+                    st.markdown(f"**Risk:** {item['risk']}")
+                    st.markdown(f"**Mitigation:** {item['mitigation']}")
 
     if STEP2_MARKDOWN.is_file():
         with st.expander("Rendered Markdown", expanded=False):
@@ -266,7 +234,7 @@ if st.session_state["is_running"] and st.session_state["pending_step"]:
             st.session_state["step2_output"] = result
             st.success(
                 f"Step 2 complete: recommended "
-                f"{result.get('recommended_sdlc', 'Unknown')}."
+                f"{result['recommended_sdlc']}."
             )
     except Exception as exc:
         st.session_state["error_message"] = explain_error(exc)
