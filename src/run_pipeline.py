@@ -14,13 +14,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def resolve_project_path(path: str | Path) -> Path:
-    """Resolve CLI paths relative to the project root."""
+    """Resolve a path from the project folder unless it is already absolute."""
     resolved = Path(path)
     return resolved if resolved.is_absolute() else PROJECT_ROOT / resolved
 
 
 def output_name(prefix: str | None, default_name: str) -> str:
-    """Return a prefixed filename or preserve the default filename."""
+    """Add a safe prefix to an output filename when provided."""
     if not prefix:
         return default_name
     safe_prefix = "".join(
@@ -40,7 +40,7 @@ def run_pipeline(
     context: str | None = None,
     prefix: str | None = None,
 ) -> tuple[dict[str, Any], dict]:
-    """Generate requirements, then select an SDLC model."""
+    """Generate requirements and then choose an SDLC model."""
     functionality = functionality.strip()
     if not functionality:
         raise ValueError("functionality must not be empty.")
@@ -81,6 +81,7 @@ def run_pipeline(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Set up the command-line options for the full pipeline."""
     parser = argparse.ArgumentParser(
         description="Run the banking requirements-to-SDLC local LLM pipeline."
     )
@@ -113,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    """Run the full pipeline from the command line."""
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
         run_pipeline(

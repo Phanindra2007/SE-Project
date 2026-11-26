@@ -22,7 +22,7 @@ DEFAULT_MARKDOWN_PATH = PROJECT_ROOT / "outputs" / "step2_sdlc_justification.md"
 
 
 def extract_json_object(raw_text: str) -> dict[str, Any]:
-    """Extract one JSON object from fences or extra text from a local model."""
+    """Read one JSON object from the model's response."""
     if not isinstance(raw_text, str) or not raw_text.strip():
         raise ValueError("The local model returned an empty response instead of JSON.")
 
@@ -31,6 +31,7 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
     text = text.replace("```", "").strip()
 
     def decode(candidate: str) -> tuple[Any | None, json.JSONDecodeError | None]:
+        """Try to parse a JSON string and return any parsing error."""
         try:
             return json.loads(candidate), None
         except json.JSONDecodeError as exc:
@@ -256,7 +257,7 @@ KEY_ALIASES = {
 
 
 def normalize_sdlc_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Unwrap common nested wrappers and canonicalize LLM key aliases."""
+    """Unwrap the response and match its keys to the expected names."""
     nested_keys = ("sdlc_recommendation", "recommendation", "result", "output")
     for wrapper in nested_keys:
         inner = result.get(wrapper)
@@ -289,7 +290,7 @@ def sdlc_response_issues(
     generated_output: dict[str, Any],
     project_context: str | None,
 ) -> list[str]:
-    """Identify schema and grounding defects worth one strict-response retry."""
+    """Find missing, invalid, or unsupported parts of the model's response."""
     factors = analyze_step1_factors(generated_output, project_context)
     issues: list[str] = []
     ranking = result.get("ranked_sdlc_options")
@@ -387,6 +388,7 @@ def sdlc_response_issues(
 def load_requirements(
     path: str | Path = DEFAULT_REQUIREMENTS_PATH,
 ) -> dict[str, Any]:
+    """Load and check generated requirements from a JSON file."""
     requirements_path = Path(path)
     if not requirements_path.is_file():
         raise FileNotFoundError(
@@ -447,6 +449,7 @@ def load_requirements(
 
 
 def temperature_from_environment() -> float:
+    """Read and check the LLM temperature setting."""
     raw_value = os.getenv("LLM_TEMPERATURE", "0.2")
     try:
         temperature = float(raw_value)
@@ -463,6 +466,7 @@ def build_sdlc_prompt(
     generated_output: dict[str, Any] | list[dict[str, Any]],
     project_context: str | None = None,
 ) -> str:
+    """Build the model prompt from requirements and optional project notes."""
     context = project_context.strip() if project_context else ""
     context_text = f"\nOptional project/team context:\n{context}\n" if context else ""
     if isinstance(generated_output, dict):
@@ -613,7 +617,7 @@ Concise JSON skeleton (top-level keys only):
 
 
 def has_specific_ranking_rationale(rationale: str) -> bool:
-    """Keep only rationale text that names evidence from this generation."""
+    """Check that a ranking explanation includes specific evidence."""
     return bool(rationale.strip())
 
 
@@ -658,12 +662,14 @@ SIGNAL_LABELS = {
 
 
 def _normalized_profile_level(value: Any) -> str | None:
+    """Return a valid Low, Medium, or High label, or None."""
     if isinstance(value, str) and value.title() in {"Low", "Medium", "High"}:
         return value.title()
     return None
 
 
 def _model_signal_profile(model: str) -> tuple[set[str], set[str]]:
+    """Get the strengths and trade-offs for an SDLC model."""
     if model in MODEL_SIGNAL_FIT:
         traits = MODEL_SIGNAL_FIT[model]
         return set(traits["supports"]), set(traits["tradeoffs"])
@@ -679,6 +685,7 @@ def _model_signal_profile(model: str) -> tuple[set[str], set[str]]:
 
 
 def normalize_model_name(value: Any) -> str | None:
+    """Match a model name or alias to an approved model."""
     if not isinstance(value, str):
         return None
     model = re.sub(r"\s+", " ", value.strip())
@@ -710,7 +717,7 @@ def analyze_step1_factors(
     generated_output: dict[str, Any] | None,
     project_context: str | None = None,
 ) -> dict[str, Any]:
-    """Extract evidence counts and profile/context signals from the current run."""
+    """Collect requirement, profile, and context details for this run."""
     generated_output = generated_output or {}
     profile = generated_output.get("functionality_profile") or {}
     requirements = generated_output.get("requirements") or []
@@ -837,7 +844,7 @@ def score_sdlc_models(
     factors: dict[str, Any],
     candidates: Iterable[str] = SCORING_CANDIDATES,
 ) -> dict[str, float]:
-    """Score current signal coverage, explicit mismatches, and hybrid overhead."""
+    """Score each model against this run's requirements and profile."""
     signal_weights = factors["signal_weights"]
     total_demand = sum(signal_weights.values())
     if total_demand == 0:
@@ -871,6 +878,7 @@ def score_sdlc_models(
 
 
 def rationale_matches_step1(rationale: str, factors: dict[str, Any]) -> bool:
+    """Check whether an explanation refers to this run's requirements."""
     text = rationale.casefold()
     matched_requirements = [
         item
@@ -904,6 +912,7 @@ def rationale_matches_step1(rationale: str, factors: dict[str, Any]) -> bool:
     }
 
     def normalize_term(term: str) -> str:
+        """Reduce a word to a simple form for matching."""
         if term.endswith("ies"):
             return term[:-3] + "y"
         if term.endswith("s") and len(term) > 4 and not term.endswith("ss"):
@@ -931,6 +940,7 @@ def model_rationale(
     factors: dict[str, Any],
     percentage: float,
 ) -> str:
+    """Build a model explanation from this run's evidence and score."""
     supports, tradeoffs = _model_signal_profile(model)
     weights = factors["signal_weights"]
     matched = sorted(signal for signal in supports if weights.get(signal, 0) > 0)
@@ -983,6 +993,7 @@ def dynamic_justification(
     ranking: list[dict[str, Any]],
     factors: dict[str, Any],
 ) -> str:
+    """Explain the recommendation using this run's ranking and requirements."""
     first = ranking[0]
     second = ranking[1]
     relevant_ids = factors["requirement_ids"]
@@ -1009,12 +1020,14 @@ def dynamic_justification(
 
 
 def dynamic_risks(factors: dict[str, Any]) -> list[dict[str, str]]:
+    """Create risks and actions tied to the generated requirements."""
     requirement_by_id = {
         item["id"]: item for item in factors["requirements"] if item["id"]
     }
     risks: list[dict[str, str]] = []
 
     def add_risk(requirement_id: str, concern: str, action: str) -> None:
+        """Add a risk and action when the requirement exists."""
         item = requirement_by_id.get(requirement_id)
         if not item:
             return
@@ -1060,7 +1073,7 @@ def rationale_evidence_coverage(
     rationale: str,
     factors: dict[str, Any],
 ) -> float:
-    """Measure how much of a model's relevant Step 1 evidence the LLM cited."""
+    """Measure how much relevant requirement evidence the rationale cites."""
     supports, tradeoffs = _model_signal_profile(model)
     relevant_ids = {
         requirement_id
@@ -1084,6 +1097,7 @@ def validate_sdlc_result(
     generated_output: dict[str, Any] | None = None,
     project_context: str | None = None,
 ) -> dict[str, Any]:
+    """Check the response and fill missing details from current requirements."""
     result = normalize_sdlc_result(result)
     missing_fields = set(CANONICAL_KEYS) - result.keys()
     if missing_fields:
@@ -1101,6 +1115,7 @@ def validate_sdlc_result(
     candidate_order: list[str] = []
 
     def remember_candidate(name: Any) -> str | None:
+        """Add an approved model once and return its standard name."""
         normalized = normalize_model_name(name)
         if normalized and normalized not in candidate_order:
             candidate_order.append(normalized)
@@ -1281,6 +1296,7 @@ def validate_sdlc_result(
 
 
 def render_markdown(result: dict[str, Any]) -> str:
+    """Format the recommendation as a readable Markdown report."""
     lines = [
         "# SDLC Recommendation",
         "",
@@ -1329,6 +1345,7 @@ def render_markdown(result: dict[str, Any]) -> str:
 
 
 def write_atomic(path: str | Path, content: str) -> None:
+    """Write text to a temporary file before replacing the destination."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -1343,7 +1360,7 @@ def select_sdlc(
     json_output_path: str | Path = DEFAULT_JSON_PATH,
     markdown_output_path: str | Path = DEFAULT_MARKDOWN_PATH,
 ) -> dict[str, Any]:
-    """Evaluate requirements and save/return the structured SDLC recommendation."""
+    """Ask the model for an SDLC choice and save both reports."""
     load_dotenv()
     requirements = load_requirements(requirements_path)
     prompt = build_sdlc_prompt(requirements, project_context)
@@ -1449,6 +1466,7 @@ Correct these validation issues: {json.dumps(response_issues)}
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    """Run the SDLC selector from the command line."""
     parser = argparse.ArgumentParser(
         description="Recommend an SDLC model for generated banking requirements."
     )

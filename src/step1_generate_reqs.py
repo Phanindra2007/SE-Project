@@ -30,7 +30,7 @@ REQUIRED_KEYS = {
 
 
 def _markdown_sections(markdown: str, filename: str) -> list[tuple[str, str]]:
-    """Split Markdown into labeled sections while retaining unheaded content."""
+    """Split Markdown into sections and keep each section heading."""
     lines = markdown.strip().splitlines()
     if not lines:
         return [(filename, "")]
@@ -56,7 +56,7 @@ def _markdown_sections(markdown: str, filename: str) -> list[tuple[str, str]]:
 
 
 def load_banking_sources(data_dir: str | Path = DEFAULT_DATA_DIR) -> str:
-    """Load all Markdown files with filename and section labels."""
+    """Read the banking Markdown files with their file and section names."""
     directory = Path(data_dir)
     if not directory.is_dir():
         raise FileNotFoundError(f"Banking reference directory not found: {directory}")
@@ -78,6 +78,7 @@ def load_banking_sources(data_dir: str | Path = DEFAULT_DATA_DIR) -> str:
 
 
 def _temperature_from_environment() -> float:
+    """Read and check the LLM temperature setting."""
     raw_value = os.getenv("LLM_TEMPERATURE", "0.2")
     try:
         temperature = float(raw_value)
@@ -91,7 +92,7 @@ def _temperature_from_environment() -> float:
 
 
 def _extract_json_text(raw_text: str) -> Any:
-    """Extract a JSON array or object from fenced or extra-text model output."""
+    """Read a JSON value from the model's response."""
     if not isinstance(raw_text, str) or not raw_text.strip():
         raise ValueError("The local model returned an empty response instead of JSON.")
 
@@ -139,7 +140,7 @@ def normalize_source_references(
     item: dict[str, Any],
     fallback_references: list[str],
 ) -> None:
-    """Normalize local-model source references before strict validation."""
+    """Make source references a non-empty list of strings."""
     references = item.get("source_references")
 
     if isinstance(references, str):
@@ -157,6 +158,7 @@ def normalize_source_references(
 
 
 def fallback_source_references(data_dir: str | Path) -> list[str]:
+    """List available Markdown files for missing source references."""
     directory = Path(data_dir)
     if not directory.is_dir():
         return []
@@ -171,7 +173,7 @@ def infer_functionality_profile(
     target_functionality: str,
     requirements: list[dict[str, Any]],
 ) -> dict[str, str]:
-    """Derive profile values from requirement language when the model omits them."""
+    """Estimate criticality and change frequency from the generated requirements."""
     evidence = " ".join(
         [
             target_functionality,
@@ -225,7 +227,7 @@ def parse_requirements_json(
     target_functionality: str | None = None,
     data_dir: str | Path = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
-    """Parse and validate a profile-bearing requirements response."""
+    """Parse the model response and check its requirements and profile."""
     parsed = _extract_json_text(raw_text)
 
     if isinstance(parsed, dict):
@@ -337,6 +339,7 @@ def parse_requirements_json(
 
 
 def _build_prompt(target_functionality: str, banking_sources: str) -> str:
+    """Build the prompt from the target feature and banking references."""
     return f"""Create requirements for: "{target_functionality}".
 
 STRICT SOURCE RULES:
@@ -400,7 +403,7 @@ def generate_requirements(
     data_dir: str | Path = DEFAULT_DATA_DIR,
     output_path: str | Path = DEFAULT_OUTPUT_PATH,
 ) -> dict[str, Any]:
-    """Generate, validate, and save requirements for a target functionality."""
+    """Ask the local model for requirements, then check and save them."""
     target_functionality = target_functionality.strip()
     if not target_functionality:
         raise ValueError("target_functionality must not be empty.")
@@ -467,6 +470,7 @@ def generate_requirements(
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    """Generate requirements from the command line."""
     parser = argparse.ArgumentParser(
         description="Generate banking requirements using a local LLM."
     )
