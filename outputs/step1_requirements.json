@@ -1,142 +1,149 @@
-[
-  {
-    "id": "REQ-F-001",
-    "type": "Functional",
-    "title": "Check Available Balance and Pending Holds",
-    "requirement": "Verify available balance and pending holds before authorizing a domestic instant fund transfer.",
-    "reasoning": "The source mandates checking available balance and pending holds before authorizing a debit or transfer [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
+{
+  "functionality_profile": {
+    "target_functionality": "Customer Notification and Alert Preferences",
+    "estimated_criticality": "Low",
+    "expected_change_frequency": "High"
   },
-  {
-    "id": "REQ-F-002",
-    "type": "Functional",
-    "title": "Reject Negative Balance Debits",
-    "requirement": "Reject transfers that would result in a negative available balance unless overdraft is explicitly enabled.",
-    "reasoning": "The source specifies rejecting debits that would make the available balance negative unless overdraft is enabled [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-003",
-    "type": "Functional",
-    "title": "Enforce Per-Transaction Debit Limit",
-    "requirement": "Reject transactions exceeding the configurable per-transaction debit limit before posting.",
-    "reasoning": "The source requires enforcing a configurable per-transaction debit limit and rejecting transactions when exceeded [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-004",
-    "type": "Functional",
-    "title": "Enforce Rolling Spending Limit",
-    "requirement": "Enforce a rolling spending limit across authorized, pending, and completed transactions.",
-    "reasoning": "The source mandates enforcing a rolling or calendar-day spending limit for all transaction types [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-005",
-    "type": "Functional",
-    "title": "Require Idempotency Key for Retries",
-    "requirement": "Generate a unique idempotency key for each transaction attempt and return the original result for retries.",
-    "reasoning": "The source requires a unique idempotency key for each transaction attempt and returning original results for retries [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-006",
-    "type": "Functional",
-    "title": "Atomic Debit and Credit Posting",
-    "requirement": "Post debit and credit entries atomically; roll back and mark as reversible on timeout or failure.",
-    "reasoning": "The source specifies atomic posting of debit and credit entries with rollback on timeout or failure [account_transactions_reqs.md | Full document].",
-    "source_references": [
-      "account_transactions_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-007",
-    "type": "Functional",
-    "title": "Screen Transactions Against Sanctions",
-    "requirement": "Screen transactions and beneficiaries against sanctions, PEP, fraud, and AML rules before release.",
-    "reasoning": "The source requires screening transactions and beneficiaries against sanctions, PEP, fraud, and AML rules [security_compliance_reqs.md | Full document].",
-    "source_references": [
-      "security_compliance_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-F-008",
-    "type": "Functional",
-    "title": "Reject Disabled Accounts",
-    "requirement": "Reject transactions from disabled, expired, locked, or revoked accounts and sessions.",
-    "reasoning": "The source mandates rejecting transactions from disabled, expired, locked, or revoked accounts [security_compliance_reqs.md | Full document].",
-    "source_references": [
-      "security_compliance_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-001",
-    "type": "Non-Functional",
-    "title": "Core API Availability",
-    "requirement": "Maintain at least 99.95% monthly availability for core account and transaction APIs, excluding planned maintenance.",
-    "reasoning": "The source specifies 99.95% monthly availability for core APIs [non_functional_operations_reqs.md | Full document].",
-    "source_references": [
-      "non_functional_operations_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-002",
-    "type": "Non-Functional",
-    "title": "Balance Inquiry Response Time",
-    "requirement": "Complete 95% of balance inquiries in under 500 ms.",
-    "reasoning": "The source requires 95% of balance inquiries to complete in under 500 ms [non_functional_operations_reqs.md | Full document].",
-    "source_references": [
-      "non_functional_operations_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-003",
-    "type": "Non-Functional",
-    "title": "Payment Submission Response Time",
-    "requirement": "Complete 95% of payment submissions in under 2 seconds.",
-    "reasoning": "The source specifies 95% of payment submissions must complete in under 2 seconds [non_functional_operations_reqs.md | Full document].",
-    "source_references": [
-      "non_functional_operations_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-004",
-    "type": "Non-Functional",
-    "title": "Stable Error Codes and Logs",
-    "requirement": "Return stable machine-readable error codes, sanitized messages, and correlation IDs for failed requests.",
-    "reasoning": "The source mandates stable error codes, sanitized messages, and correlation IDs for failed requests [non_functional_operations_reqs.md | Full document].",
-    "source_references": [
-      "non_functional_operations_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-005",
-    "type": "Non-Functional",
-    "title": "Immutable Transaction Records",
-    "requirement": "Retain immutable transaction records and audit logs for at least 7 years or the applicable regulatory period.",
-    "reasoning": "The source requires retaining immutable transaction records and audit logs for 7 years or regulatory periods [non_functional_operations_reqs.md | Full document].",
-    "source_references": [
-      "non_functional_operations_reqs.md | Full document"
-    ]
-  },
-  {
-    "id": "REQ-NF-006",
-    "type": "Non-Functional",
-    "title": "Data Encryption and Retention",
-    "requirement": "Encrypt sensitive data with TLS 1.2+ in transit and approved encryption at rest, with recoverable data purged per retention schedules.",
-    "reasoning": "The source specifies TLS 1.2+ encryption in transit, approved encryption at rest, and data purging per retention schedules [security_compliance_reqs.md | Full document].",
-    "source_references": [
-      "security_compliance_reqs.md | Full document"
-    ]
-  }
-]
+  "requirements": [
+    {
+      "id": "REQ-F-001",
+      "type": "Functional",
+      "title": "Notification Preference Configuration",
+      "requirement": "Customers must be able to configure notification preferences via the UI, including frequency, channels, and transaction types.",
+      "reasoning": "Security compliance requires authorization for operations (security_compliance_reqs.md | Enforce authorization server-side), and UI access to preferences is necessary for customer control. [Assumption] Notification preferences are considered customer data requiring secure configuration.",
+      "source_references": [
+        "security_compliance_reqs.md | Enforce authorization server-side"
+      ]
+    },
+    {
+      "id": "REQ-F-002",
+      "type": "Functional",
+      "title": "Immutable Audit Logs for Preferences",
+      "requirement": "All changes to notification preferences must be logged with timestamps, actor IDs, and outcome codes in immutable audit records.",
+      "reasoning": "Immutable audit records are required for authentication and authorization failures (security_compliance_reqs.md | Write immutable audit records), which applies to preference changes. [Assumption] Preference modifications are treated as operational events requiring audit tracking.",
+      "source_references": [
+        "security_compliance_reqs.md | Write immutable audit records"
+      ]
+    },
+    {
+      "id": "REQ-F-003",
+      "type": "Functional",
+      "title": "Data Encryption for Preferences",
+      "requirement": "Notification preference data must be encrypted at rest using approved encryption standards.",
+      "reasoning": "Security compliance mandates encryption for sensitive data (security_compliance_reqs.md | Encrypt sensitive data with TLS 1.2 or newer in transit and approved encryption at rest). [Assumption] Notification preferences are considered sensitive customer data.",
+      "source_references": [
+        "security_compliance_reqs.md | Encrypt sensitive data with TLS 1.2 or newer in transit and approved encryption at rest"
+      ]
+    },
+    {
+      "id": "REQ-F-004",
+      "type": "Functional",
+      "title": "HTTPS for Preference UI",
+      "requirement": "All UI interactions for configuring notification preferences must use HTTPS.",
+      "reasoning": "Non-functional operations require HTTPS for secure communication (non_functional_operations_reqs.md | Use HTTPS). [Assumption] Preference configuration is a customer-facing operation requiring secure transport.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Use HTTPS"
+      ]
+    },
+    {
+      "id": "REQ-F-005",
+      "type": "Functional",
+      "title": "Error Handling for Preference Changes",
+      "requirement": "Failed preference changes must return stable machine-readable error codes and correlation IDs.",
+      "reasoning": "Non-functional operations mandate error code standards for failed requests (non_functional_operations_reqs.md | Return stable machine-readable error codes). [Assumption] Preference changes are treated as operational requests requiring error reporting.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Return stable machine-readable error codes"
+      ]
+    },
+    {
+      "id": "REQ-F-006",
+      "type": "Functional",
+      "title": "Preference Retention Period",
+      "requirement": "Notification preference records must be retained for at least 7 years or the applicable regulatory period.",
+      "reasoning": "Non-functional operations require immutable transaction records and audit logs for 7 years (non_functional_operations_reqs.md | Retain immutable transaction records and audit logs for at least 7 years). [Assumption] Preference data is treated as operational records requiring retention.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Retain immutable transaction records and audit logs for at least 7 years"
+      ]
+    },
+    {
+      "id": "REQ-F-007",
+      "type": "Functional",
+      "title": "Preference UI Availability",
+      "requirement": "Notification preference configuration must maintain 99.95% monthly availability for core account APIs.",
+      "reasoning": "Non-functional operations mandate 99.95% availability for core APIs (non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs). [Assumption] Preference configuration is part of core account functionality.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs"
+      ]
+    },
+    {
+      "id": "REQ-F-008",
+      "type": "Functional",
+      "title": "Preference Redaction",
+      "requirement": "Personally identifiable data in preference logs must be redacted according to documented retention schedules.",
+      "reasoning": "Non-functional operations require redaction of PII from logs (non_functional_operations_reqs.md | Redact personally identifiable data from logs). [Assumption] Preference data may contain PII requiring redaction.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Redact personally identifiable data from logs"
+      ]
+    },
+    {
+      "id": "REQ-NF-001",
+      "type": "Non-Functional",
+      "title": "Response Time for Preference Changes",
+      "requirement": "Preference change requests must complete in under 500 ms for 95% of interactions.",
+      "reasoning": "Non-functional operations specify 500 ms for balance inquiries (non_functional_operations_reqs.md | Complete 95% of balance inquiries in under 500 ms). [Assumption] Preference changes are treated similarly to balance inquiries for latency requirements.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Complete 95% of balance inquiries in under 500 ms"
+      ]
+    },
+    {
+      "id": "REQ-NF-002",
+      "type": "Non-Functional",
+      "title": "Correlation ID for Preference Requests",
+      "requirement": "All preference-related requests must include and propagate correlation IDs for traceability.",
+      "reasoning": "Non-functional operations require correlation IDs for failed requests (non_functional_operations_reqs.md | Return stable machine-readable error codes, sanitized customer messages, and correlation IDs for every failed request). [Assumption] Preference operations are treated as transactional requests requiring traceability.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Return stable machine-readable error codes, sanitized customer messages, and correlation IDs for every failed request"
+      ]
+    },
+    {
+      "id": "REQ-NF-003",
+      "type": "Non-Functional",
+      "title": "Structured Logging for Preferences",
+      "requirement": "Preference-related logs must include timestamps, actor IDs, and outcome codes in structured format.",
+      "reasoning": "Non-functional operations mandate structured logging for traceability (non_functional_operations_reqs.md | Use HTTPS). [Assumption] Preference operations require structured logging for audit and debugging.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Use HTTPS"
+      ]
+    },
+    {
+      "id": "REQ-NF-004",
+      "type": "Non-Functional",
+      "title": "Preference UI Scalability",
+      "requirement": "The preference configuration UI must support concurrent user sessions without degradation.",
+      "reasoning": "Non-functional operations imply scalability for core account APIs (non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs). [Assumption] Preference configuration is part of core account functionality requiring scalability.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs"
+      ]
+    },
+    {
+      "id": "REQ-NF-005",
+      "type": "Non-Functional",
+      "title": "Preference Data Integrity",
+      "requirement": "Preference data must remain consistent across all system components during configuration.",
+      "reasoning": "Account transaction rules require consistency for debits (account_transactions_reqs.md | Check available balance before debit). [Assumption] Preference data integrity is analogous to transactional consistency requirements.",
+      "source_references": [
+        "account_transactions_reqs.md | Check available balance before debit"
+      ]
+    },
+    {
+      "id": "REQ-NF-006",
+      "type": "Non-Functional",
+      "title": "Preference UI Accessibility",
+      "requirement": "Notification preference configuration must be accessible to users with disabilities via compliant UI standards.",
+      "reasoning": "Non-functional operations imply accessibility for core account APIs (non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs). [Assumption] Preference configuration is part of core account functionality requiring accessibility compliance.",
+      "source_references": [
+        "non_functional_operations_reqs.md | Maintain at least 99.95% monthly availability for core account and transaction APIs"
+      ]
+    }
+  ]
+}
