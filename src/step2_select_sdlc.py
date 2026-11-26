@@ -15,7 +15,6 @@ from typing import Any, Iterable
 from dotenv import load_dotenv
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUIREMENTS_PATH = PROJECT_ROOT / "outputs" / "step1_requirements.json"
 DEFAULT_JSON_PATH = PROJECT_ROOT / "outputs" / "step2_sdlc_justification.json"
@@ -96,62 +95,115 @@ APPROVED_SDLC_MODELS = {
 MODEL_SIGNAL_FIT = {
     "Waterfall": {
         "supports": {
-            "stable_scope", "change_low", "formal_gates", "compliance", "audit",
+            "stable_scope",
+            "change_low",
+            "formal_gates",
+            "compliance",
+            "audit",
         },
         "tradeoffs": {
-            "change_high", "ui_workflow", "uncertainty", "fast_delivery",
-            "criticality_high", "security", "availability",
-            "transactional_safety", "verification",
+            "change_high",
+            "ui_workflow",
+            "uncertainty",
+            "fast_delivery",
+            "criticality_high",
+            "security",
+            "availability",
+            "transactional_safety",
+            "verification",
         },
     },
     "V-Shaped": {
         "supports": {
-            "formal_gates", "verification", "criticality_high", "security",
-            "compliance", "audit", "availability", "performance",
+            "formal_gates",
+            "verification",
+            "criticality_high",
+            "security",
+            "compliance",
+            "audit",
+            "availability",
+            "performance",
             "transactional_safety",
         },
         "tradeoffs": {"change_high", "ui_workflow", "uncertainty", "fast_delivery"},
     },
     "Prototype": {
         "supports": {
-            "uncertainty", "ui_workflow", "change_high", "stakeholder_feedback",
+            "uncertainty",
+            "ui_workflow",
+            "change_high",
+            "stakeholder_feedback",
         },
         "tradeoffs": {
-            "criticality_high", "security", "compliance", "audit",
-            "formal_gates", "verification", "transactional_safety",
+            "criticality_high",
+            "security",
+            "compliance",
+            "audit",
+            "formal_gates",
+            "verification",
+            "transactional_safety",
         },
     },
     "RAD": {
         "supports": {
-            "change_high", "change_medium", "ui_workflow", "stakeholder_feedback",
+            "change_high",
+            "change_medium",
+            "ui_workflow",
+            "stakeholder_feedback",
             "fast_delivery",
         },
         "tradeoffs": {
-            "criticality_high", "security", "compliance", "audit",
-            "formal_gates", "verification", "transactional_safety",
+            "criticality_high",
+            "security",
+            "compliance",
+            "audit",
+            "formal_gates",
+            "verification",
+            "transactional_safety",
         },
     },
     "Spiral": {
         "supports": {
-            "criticality_high", "security", "compliance", "audit",
-            "availability", "performance", "transactional_safety",
-            "uncertainty", "assumption", "verification", "formal_gates",
+            "criticality_high",
+            "security",
+            "compliance",
+            "audit",
+            "availability",
+            "performance",
+            "transactional_safety",
+            "uncertainty",
+            "assumption",
+            "verification",
+            "formal_gates",
         },
         "tradeoffs": {"criticality_low", "change_low", "fast_delivery"},
     },
     "Agile": {
         "supports": {
-            "change_high", "change_medium", "ui_workflow",
-            "stakeholder_feedback", "modular_delivery",
+            "change_high",
+            "change_medium",
+            "ui_workflow",
+            "stakeholder_feedback",
+            "modular_delivery",
         },
         "tradeoffs": {
-            "formal_gates", "verification", "compliance", "audit", "security",
+            "formal_gates",
+            "verification",
+            "compliance",
+            "audit",
+            "security",
         },
     },
     "Agile-DevSecOps": {
         "supports": {
-            "change_high", "change_medium", "security", "compliance", "audit",
-            "availability", "performance", "transactional_safety",
+            "change_high",
+            "change_medium",
+            "security",
+            "compliance",
+            "audit",
+            "availability",
+            "performance",
+            "transactional_safety",
             "modular_delivery",
         },
         "tradeoffs": {"stable_scope"},
@@ -164,30 +216,41 @@ HYBRID_COMPONENTS = {
     "Spiral + Agile": ("Spiral", "Agile"),
     "Agile-DevSecOps": ("Agile", "V-Shaped"),
 }
-SCORING_CANDIDATES = tuple(
-    dict.fromkeys((*MODEL_SIGNAL_FIT, *HYBRID_COMPONENTS))
-)
+
+SCORING_CANDIDATES = tuple(dict.fromkeys((*MODEL_SIGNAL_FIT, *HYBRID_COMPONENTS)))
 
 KEY_ALIASES = {
     "recommended_sdlc": (
-        "recommended_sdlc", "selected_sdlc", "sdlc_model",
-        "recommended_model", "sdlc",
+        "recommended_sdlc",
+        "selected_sdlc",
+        "sdlc_model",
+        "recommended_model",
+        "sdlc",
     ),
     "alternative_considered": (
-        "alternative_considered", "alternatives_considered", "alternatives",
+        "alternative_considered",
+        "alternatives_considered",
+        "alternatives",
         "alternative_models",
     ),
     "se_justification": (
-        "se_justification", "justification", "engineering_justification",
+        "se_justification",
+        "justification",
+        "engineering_justification",
         "rationale",
     ),
     "key_risks_and_mitigations": (
-        "key_risks_and_mitigations", "risks_and_mitigations", "key_risks",
+        "key_risks_and_mitigations",
+        "risks_and_mitigations",
+        "key_risks",
         "risks",
     ),
     "ranked_sdlc_options": (
-        "ranked_sdlc_options", "ranked_options", "sdlc_ranking",
-        "ranked_models", "model_ranking",
+        "ranked_sdlc_options",
+        "ranked_options",
+        "sdlc_ranking",
+        "ranked_models",
+        "model_ranking",
     ),
 }
 
@@ -255,9 +318,8 @@ def sdlc_response_issues(
                 continue
             percentages.append(float(percentage))
             rationale = item.get("rationale")
-            if (
-                not isinstance(rationale, str)
-                or not rationale_matches_step1(rationale, factors)
+            if not isinstance(rationale, str) or not rationale_matches_step1(
+                rationale, factors
             ):
                 issues.append(f"{model} rationale lacks current requirement evidence")
         if any(left < right for left, right in zip(percentages, percentages[1:])):
@@ -302,7 +364,9 @@ def sdlc_response_issues(
                 or not math.isfinite(float(percentage))
                 or not 0 <= float(percentage) <= 100
             ):
-                issues.append("an alternative entry lacks a grounded model, score, or reason")
+                issues.append(
+                    "an alternative entry lacks a grounded model, score, or reason"
+                )
     risks = result.get("key_risks_and_mitigations")
     if not isinstance(risks, list) or len(risks) < 3:
         issues.append("key_risks_and_mitigations needs three current-run risks")
@@ -313,9 +377,7 @@ def sdlc_response_issues(
             if isinstance(item, dict)
             and isinstance(item.get("risk"), str)
             and isinstance(item.get("mitigation"), str)
-            and rationale_matches_step1(
-                f"{item['risk']} {item['mitigation']}", factors
-            )
+            and rationale_matches_step1(f"{item['risk']} {item['mitigation']}", factors)
         ]
         if len(grounded_risks) < 3:
             issues.append("risk mitigations lack current requirement evidence")
@@ -610,7 +672,9 @@ def _model_signal_profile(model: str) -> tuple[set[str], set[str]]:
         return set(), set()
     component_profiles = [_model_signal_profile(component) for component in components]
     supports = set().union(*(profile[0] for profile in component_profiles))
-    tradeoffs = set.intersection(*(profile[1] for profile in component_profiles)) - supports
+    tradeoffs = (
+        set.intersection(*(profile[1] for profile in component_profiles)) - supports
+    )
     return supports, tradeoffs
 
 
@@ -633,7 +697,11 @@ def normalize_model_name(value: Any) -> str | None:
     if alias:
         return alias
     return next(
-        (candidate for candidate in APPROVED_SDLC_MODELS if model.casefold() == candidate.casefold()),
+        (
+            candidate
+            for candidate in APPROVED_SDLC_MODELS
+            if model.casefold() == candidate.casefold()
+        ),
         None,
     )
 
@@ -727,9 +795,7 @@ def analyze_step1_factors(
     signal_requirement_ids = {
         key: sorted(set(ids)) for key, ids in category_ids.items()
     }
-    signal_weights = {
-        key: len(set(ids)) for key, ids in signal_requirement_ids.items()
-    }
+    signal_weights = {key: len(set(ids)) for key, ids in signal_requirement_ids.items()}
     signal_weights["ui_workflow"] += int(target_is_ui_oriented)
     signal_weights.update(
         {
@@ -749,9 +815,7 @@ def analyze_step1_factors(
             + context_signals["formal_gates"],
         }
     )
-    signal_weights = {
-        key: value for key, value in signal_weights.items() if value > 0
-    }
+    signal_weights = {key: value for key, value in signal_weights.items() if value > 0}
     return {
         "target": target,
         "criticality": criticality,
@@ -765,9 +829,7 @@ def analyze_step1_factors(
         },
         "assumption_ids": sorted(set(assumption_ids)),
         "requirements": requirement_records,
-        "requirement_ids": [
-            item["id"] for item in requirement_records if item["id"]
-        ],
+        "requirement_ids": [item["id"] for item in requirement_records if item["id"]],
     }
 
 
@@ -790,14 +852,10 @@ def score_sdlc_models(
             continue
         supports, tradeoffs = _model_signal_profile(normalized_model)
         supported_demand = sum(
-            weight
-            for signal, weight in signal_weights.items()
-            if signal in supports
+            weight for signal, weight in signal_weights.items() if signal in supports
         )
         conflicting_demand = sum(
-            weight
-            for signal, weight in signal_weights.items()
-            if signal in tradeoffs
+            weight for signal, weight in signal_weights.items() if signal in tradeoffs
         )
         components = HYBRID_COMPONENTS.get(normalized_model, (normalized_model,))
         coordination_demand = (
@@ -805,13 +863,9 @@ def score_sdlc_models(
             * total_demand
             / max(1, len(factors["requirement_ids"]))
         )
-        evaluated_demand = (
-            total_demand + conflicting_demand + coordination_demand
-        )
+        evaluated_demand = total_demand + conflicting_demand + coordination_demand
         scores[normalized_model] = (
-            100.0 * supported_demand / evaluated_demand
-            if evaluated_demand
-            else 0.0
+            100.0 * supported_demand / evaluated_demand if evaluated_demand else 0.0
         )
     return scores
 
@@ -827,19 +881,28 @@ def rationale_matches_step1(rationale: str, factors: dict[str, Any]) -> bool:
         return False
     if factors["target"].casefold() in text:
         return True
-    if (
-        "criticality" in text
-        and factors["criticality"].casefold() in text
-    ) or (
+    if ("criticality" in text and factors["criticality"].casefold() in text) or (
         ("change frequency" in text or "change_frequency" in text)
         and factors["change_frequency"].casefold() in text
     ):
         return True
     stop_words = {
-        "about", "after", "before", "between", "customer", "from",
-        "must", "requirement", "shall", "should", "that", "their",
-        "this", "with",
+        "about",
+        "after",
+        "before",
+        "between",
+        "customer",
+        "from",
+        "must",
+        "requirement",
+        "shall",
+        "should",
+        "that",
+        "their",
+        "this",
+        "with",
     }
+
     def normalize_term(term: str) -> str:
         if term.endswith("ies"):
             return term[:-3] + "y"
@@ -848,8 +911,7 @@ def rationale_matches_step1(rationale: str, factors: dict[str, Any]) -> bool:
         return term
 
     rationale_words = {
-        normalize_term(word)
-        for word in re.findall(r"\b[a-z0-9-]{4,}\b", text)
+        normalize_term(word) for word in re.findall(r"\b[a-z0-9-]{4,}\b", text)
     }
     for requirement in matched_requirements:
         terms = {
@@ -872,9 +934,7 @@ def model_rationale(
     supports, tradeoffs = _model_signal_profile(model)
     weights = factors["signal_weights"]
     matched = sorted(signal for signal in supports if weights.get(signal, 0) > 0)
-    mismatched = sorted(
-        signal for signal in tradeoffs if weights.get(signal, 0) > 0
-    )
+    mismatched = sorted(signal for signal in tradeoffs if weights.get(signal, 0) > 0)
     evidence_ids = sorted(
         {
             requirement_id
@@ -887,9 +947,11 @@ def model_rationale(
     }
     cited_ids = evidence_ids or factors["requirement_ids"]
     evidence = ", ".join(
-        f"{requirement_id} ({requirement_by_id[requirement_id]['title']})"
-        if requirement_id in requirement_by_id
-        else requirement_id
+        (
+            f"{requirement_id} ({requirement_by_id[requirement_id]['title']})"
+            if requirement_id in requirement_by_id
+            else requirement_id
+        )
         for requirement_id in cited_ids
     )
     matched_text = ", ".join(SIGNAL_LABELS.get(signal, signal) for signal in matched)
@@ -909,15 +971,11 @@ def model_rationale(
     if matched:
         rationale += f" Its fit in {matched_text} is supported by {evidence}."
     else:
-        rationale += (
-            f" This fit follows the current profile signals and {evidence}."
-        )
+        rationale += f" This fit follows the current profile signals and {evidence}."
     if tradeoff_text:
         rationale += f" Its trade-offs are {tradeoff_text}, also present in {evidence}."
     if factors["assumption_ids"]:
-        rationale += (
-            f" Validate assumptions in {', '.join(factors['assumption_ids'])}."
-        )
+        rationale += f" Validate assumptions in {', '.join(factors['assumption_ids'])}."
     return rationale
 
 
@@ -935,13 +993,10 @@ def dynamic_justification(
         if count
     )
     signal_summary = counts or ", ".join(
-        f"{item['id']} ({item['title']})"
-        for item in factors["requirements"]
+        f"{item['id']} ({item['title']})" for item in factors["requirements"]
     )
     context_summary = (
-        f" Context notes: {factors['context']}."
-        if factors["context"]
-        else ""
+        f" Context notes: {factors['context']}." if factors["context"] else ""
     )
     return (
         f"{first['sdlc_model']} ranks first at {first['percentage']}% for "
@@ -1057,9 +1112,7 @@ def validate_sdlc_result(
         for item in raw_ranked:
             if not isinstance(item, dict):
                 continue
-            model = remember_candidate(
-                item.get("sdlc_model", item.get("model"))
-            )
+            model = remember_candidate(item.get("sdlc_model", item.get("model")))
             if not model:
                 continue
             percentage = item.get(
@@ -1097,15 +1150,10 @@ def validate_sdlc_result(
             ):
                 supplied_scores.setdefault(model, float(percentage))
             reason = item.get("reason", item.get("rationale"))
-            if (
-                isinstance(reason, str)
-                and rationale_matches_step1(reason, factors)
-            ):
+            if isinstance(reason, str) and rationale_matches_step1(reason, factors):
                 supplied_rationales.setdefault(model, reason.strip())
 
-    derived_order = sorted(
-        derived_scores, key=derived_scores.__getitem__, reverse=True
-    )
+    derived_order = sorted(derived_scores, key=derived_scores.__getitem__, reverse=True)
     for model in derived_order:
         if model not in candidate_order:
             candidate_order.append(model)
@@ -1185,9 +1233,7 @@ def validate_sdlc_result(
                 and risk.strip()
                 and isinstance(mitigation, str)
                 and mitigation.strip()
-                and rationale_matches_step1(
-                    f"{risk} {mitigation}", factors
-                )
+                and rationale_matches_step1(f"{risk} {mitigation}", factors)
             ):
                 normalized_risks.append(
                     {"risk": risk.strip(), "mitigation": mitigation.strip()}
@@ -1205,9 +1251,9 @@ def validate_sdlc_result(
         )
     if dynamic_rationale_models:
         derived_fields.append("rationales for " + ", ".join(dynamic_rationale_models))
-    if not isinstance(result.get("se_justification"), str) or not rationale_matches_step1(
-        str(result.get("se_justification", "")), factors
-    ):
+    if not isinstance(
+        result.get("se_justification"), str
+    ) or not rationale_matches_step1(str(result.get("se_justification", "")), factors):
         derived_fields.append("the engineering justification")
     if len(normalized_risks) < 3:
         derived_fields.append("requirement-linked risk mitigations")
@@ -1253,20 +1299,29 @@ def render_markdown(result: dict[str, Any]) -> str:
             f"{option['percentage']}% | {rationale} |"
         )
 
-    lines.extend([
-        "",
-        "## Alternatives Considered",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Alternatives Considered",
+            "",
+        ]
+    )
     for alternative in result["alternative_considered"]:
         percentage = alternative.get("percentage")
         fit_text = f" ({percentage}% fit)" if percentage is not None else ""
-        lines.append(
-            f"- **{alternative['model']}**{fit_text}: {alternative['reason']}"
-        )
+        lines.append(f"- **{alternative['model']}**{fit_text}: {alternative['reason']}")
 
-    lines.extend(["", "## Software Engineering Justification", "", result["se_justification"], "",
-                  "## Key Risks and Mitigations", ""])
+    lines.extend(
+        [
+            "",
+            "## Software Engineering Justification",
+            "",
+            result["se_justification"],
+            "",
+            "## Key Risks and Mitigations",
+            "",
+        ]
+    )
     for item in result["key_risks_and_mitigations"]:
         lines.append(f"- **Risk:** {item['risk']}")
         lines.append(f"  - **Mitigation:** {item['mitigation']}")
@@ -1373,13 +1428,9 @@ Correct these validation issues: {json.dumps(response_issues)}
                     {"role": "user", "content": retry_prompt},
                 ],
             )
-            retry_text = (
-                retry.choices[0].message.content if retry.choices else None
-            )
+            retry_text = retry.choices[0].message.content if retry.choices else None
             if retry_text:
-                retry_result = normalize_sdlc_result(
-                    extract_json_object(retry_text)
-                )
+                retry_result = normalize_sdlc_result(extract_json_object(retry_text))
                 result.update(retry_result)
         except (APIConnectionError, APITimeoutError, APIError, ValueError) as exc:
             warnings.warn(
@@ -1416,7 +1467,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=str(DEFAULT_REQUIREMENTS_PATH),
         help="Path to step 1 requirements JSON.",
     )
-    parser.add_argument("--context", default=None, help="Optional project/team context.")
+    parser.add_argument(
+        "--context", default=None, help="Optional project/team context."
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     requirements_path = args.requirements_pos or args.requirements
     project_context = args.context_pos or args.context
