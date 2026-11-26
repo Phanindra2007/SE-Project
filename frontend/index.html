@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Banking Requirements &amp; SDLC Explorer</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b5cf6' stroke-width='2'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z'/%3E%3Cpath d='M2 17l10 5 10-5'/%3E%3Cpath d='M2 12l10 5 10-5'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page-container">
+    <!-- ================================================================
+         SECTION 1: BANKING FUNCTIONALITY & HEADER
+         ================================================================ -->
+    <header class="section-header card">
+      <div class="header-top-row">
+        <div class="brand-cluster">
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div>
+            <h1 class="project-title">Banking Requirements &amp; SDLC Explorer</h1>
+            <p class="project-description">
+              Generate grounded banking software requirements from domain specifications, then evaluate and justify the optimal SDLC model.
+            </p>
+          </div>
+        </div>
+
+        <div class="status-cluster">
+          <div id="llm-status-pill" class="llm-pill" title="Local LLM connection status">
+            <span class="llm-dot"></span>
+            <span id="llm-status-text">Checking LLM...</span>
+          </div>
+          <button id="refresh-health-btn" type="button" class="icon-btn" title="Refresh LLM connection status" aria-label="Refresh LLM status">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="selector-grid">
+        <div class="field-group">
+          <label for="functionality-preset-select" class="field-label">Select Banking Preset</label>
+          <div class="select-wrap">
+            <select id="functionality-preset-select" class="select-input">
+              <option value="Domestic Instant Fund Transfer">Domestic Instant Fund Transfer</option>
+              <option value="Customer Notification and Alert Preferences">Customer Notification and Alert Preferences</option>
+              <option value="Beneficiary Management and Step-Up Verification">Beneficiary Management &amp; Step-Up Verification</option>
+              <option value="Account Statement and Audit Export">Account Statement &amp; Audit Export</option>
+              <option value="__custom__">Custom Functionality...</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="functionality-input" class="field-label">Target Banking Functionality</label>
+          <input
+            id="functionality-input"
+            type="text"
+            class="text-input"
+            placeholder="e.g., Domestic Instant Fund Transfer"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
+      <div class="header-meta-row">
+        <div class="meta-pills">
+          <span class="meta-chip" id="meta-model-chip">Model: —</span>
+          <span class="meta-chip" id="meta-docs-chip">Specs: —</span>
+          <span class="meta-chip" id="meta-candidates-chip">SDLC Models: —</span>
+        </div>
+
+        <details class="docs-drawer">
+          <summary class="docs-toggle">View Banking Reference Documents</summary>
+          <div id="reference-docs-container" class="docs-grid">
+            <!-- Populated dynamically -->
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <!-- Inline Notification Banner -->
+    <div id="global-alert" class="global-alert hidden" role="alert">
+      <div class="alert-left">
+        <span id="global-alert-icon" class="alert-icon"></span>
+        <div>
+          <strong id="global-alert-title">Notice</strong>
+          <p id="global-alert-message"></p>
+        </div>
+      </div>
+      <button id="global-alert-close" type="button" class="icon-btn" aria-label="Dismiss message">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- ================================================================
+         SECTION 2: TWO MAIN WORKFLOW CARDS (EQUAL SIZE)
+         ================================================================ -->
+    <section class="workflow-section" aria-label="Two-Stage Workflow">
+      <div class="workflow-grid">
+        <!-- Step 1 Card -->
+        <article id="card-step1" class="workflow-card card">
+          <div class="wf-card-top">
+            <span class="step-badge">STEP 1</span>
+            <span id="step1-status-pill" class="pill pill-muted">Ready</span>
+          </div>
+
+          <h2 class="wf-card-title">Generate Requirements</h2>
+          <p class="wf-card-desc">
+            Runs <code>step1_generate_reqs.py</code> with the local LLM to produce grounded Functional and Non-Functional requirements from the banking reference docs.
+          </p>
+
+          <div class="wf-card-context-spacer">
+            <div class="wf-info-box">
+              <span class="wf-info-label">Target Input</span>
+              <span id="step1-target-preview" class="wf-info-value">Domestic Instant Fund Transfer</span>
+            </div>
+          </div>
+
+          <div class="wf-card-footer">
+            <div id="step1-loading-row" class="inline-loading hidden">
+              <span class="spinner" aria-hidden="true"></span>
+              <span class="inline-loading-text">Generating requirements... <strong id="step1-timer">0.0s</strong></span>
+            </div>
+            <button id="btn-run-step1" type="button" class="btn btn-primary btn-block">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              <span>Generate Requirements</span>
+            </button>
+          </div>
+        </article>
+
+        <!-- Step 2 Card -->
+        <article id="card-step2" class="workflow-card card">
+          <div class="wf-card-top">
+            <span class="step-badge step-badge-blue">STEP 2</span>
+            <span id="step2-status-pill" class="pill pill-muted">Requires Step 1</span>
+          </div>
+
+          <h2 class="wf-card-title">Select SDLC Model</h2>
+          <p class="wf-card-desc">
+            Runs <code>step2_select_sdlc.py</code> on the generated requirements to rank 10 candidate SDLC models, explain trade-offs, and identify key risks.
+          </p>
+
+          <div class="wf-card-context-spacer">
+            <label for="step2-context-input" class="wf-context-label">
+              Optional Project / Team Context
+            </label>
+            <input
+              id="step2-context-input"
+              type="text"
+              class="text-input text-input-sm"
+              placeholder="e.g., Strict regulatory audit or frequent UI demos"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="wf-card-footer">
+            <div id="step2-loading-row" class="inline-loading hidden">
+              <span class="spinner" aria-hidden="true"></span>
+              <span class="inline-loading-text">Evaluating SDLC models... <strong id="step2-timer">0.0s</strong></span>
+            </div>
+            <button id="btn-run-step2" type="button" class="btn btn-secondary btn-block" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20V10M18 20V4M6 20v-4"/>
+              </svg>
+              <span>Select SDLC Model</span>
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ================================================================
+         SECTION 3: RESULTS (DYNAMICALLY BELOW WORKFLOW CARDS)
+         ================================================================ -->
+    <section id="section-results" class="results-section" aria-label="Pipeline Results">
+      <!-- Empty State when neither step has results -->
+      <div id="results-empty-state" class="card empty-state">
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+        </div>
+        <h3>Ready to Start</h3>
+        <p>Select or enter a banking functionality above, then click <strong>Generate Requirements</strong> to begin Step 1.</p>
+      </div>
+
+      <!-- STEP 1 RESULTS -->
+      <div id="step1-results-block" class="results-block hidden">
+        <div class="block-header">
+          <div>
+            <span class="eyebrow">Step 1 Output</span>
+            <h2 class="block-title">Generated Banking Requirements</h2>
+          </div>
+          <span id="step1-timing-badge" class="pill pill-info">Saved</span>
+        </div>
+
+        <!-- Functionality Profile & Counts -->
+        <div class="card profile-card">
+          <div class="profile-summary">
+            <span class="profile-label">Target Functionality</span>
+            <h3 id="profile-target-title" class="profile-target">—</h3>
+          </div>
+          <div class="profile-stats">
+            <div class="stat-item">
+              <span class="stat-label">Criticality</span>
+              <span id="profile-criticality" class="pill">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Change Freq</span>
+              <span id="profile-change-freq" class="pill">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Functional</span>
+              <span id="profile-func-count" class="stat-num">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Non-Functional</span>
+              <span id="profile-nonfunc-count" class="stat-num">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Assumptions</span>
+              <span id="profile-assumption-count" class="stat-num">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter & Search -->
+        <div class="filter-bar">
+          <div class="filter-pills" role="tablist" aria-label="Filter requirements">
+            <button type="button" class="filter-pill active" data-filter="all">All (<span id="count-all">0</span>)</button>
+            <button type="button" class="filter-pill" data-filter="Functional">Functional (<span id="count-func">0</span>)</button>
+            <button type="button" class="filter-pill" data-filter="Non-Functional">Non-Functional (<span id="count-nonfunc">0</span>)</button>
+            <button type="button" class="filter-pill" data-filter="assumption">Assumptions (<span id="count-assumption">0</span>)</button>
+          </div>
+          <input id="req-search-input" type="search" class="search-input" placeholder="Search ID, title, or text..." />
+        </div>
+
+        <!-- Organised Functional & Non-Functional Requirements -->
+        <div id="requirements-groups-container" class="requirements-groups">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- STEP 2 RESULTS (BELOW STEP 1 RESULTS) -->
+      <div id="step2-results-block" class="results-block hidden">
+        <div class="block-header">
+          <div>
+            <span class="eyebrow">Step 2 Output</span>
+            <h2 class="block-title">SDLC Recommendation &amp; Analysis</h2>
+          </div>
+          <span id="step2-timing-badge" class="pill pill-success">Saved</span>
+        </div>
+
+        <!-- Recommended SDLC Hero -->
+        <div class="card recommended-card">
+          <div class="recommended-info">
+            <span class="eyebrow">Recommended SDLC Model (Rank #1)</span>
+            <h3 id="sdlc-recommended-name" class="recommended-name">—</h3>
+            <p id="sdlc-recommended-sub" class="recommended-sub">—</p>
+          </div>
+          <div class="recommended-score">
+            <span class="score-label">Composite Fit</span>
+            <div id="sdlc-recommended-score" class="score-value">—</div>
+            <div class="progress-track">
+              <div id="sdlc-recommended-bar" class="progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Engineering Justification -->
+        <div class="card">
+          <h3 class="subcard-title">Software Engineering Justification</h3>
+          <div id="sdlc-justification-text" class="justification-body"></div>
+        </div>
+
+        <!-- Visualizations: Fit Chart + Signal Coverage -->
+        <div class="two-col-grid">
+          <div class="card">
+            <div class="subcard-head">
+              <h3 class="subcard-title">SDLC Fit Score Comparison</h3>
+              <span class="muted-small">All 10 evaluated models</span>
+            </div>
+            <div id="chart-sdlc-bars" class="bar-chart"></div>
+          </div>
+
+          <div class="card">
+            <div class="subcard-head">
+              <h3 class="subcard-title">Requirement Signal Breakdown</h3>
+              <span class="muted-small">Extracted by <code>analyze_step1_factors()</code></span>
+            </div>
+            <div id="chart-signals-bars" class="bar-chart"></div>
+          </div>
+        </div>
+
+        <!-- Ranked SDLC Models -->
+        <div class="card">
+          <div class="subcard-head">
+            <h3 class="subcard-title">Ranked SDLC Models</h3>
+            <span id="ranked-count-badge" class="pill pill-info">10 Models</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th class="col-rank">Rank</th>
+                  <th class="col-model">SDLC Model</th>
+                  <th class="col-fit">Fit Score</th>
+                  <th>Concise Rationale</th>
+                </tr>
+              </thead>
+              <tbody id="sdlc-ranked-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Key Risks & Mitigations -->
+        <div class="card">
+          <div class="subcard-head">
+            <h3 class="subcard-title">Key Risks &amp; Mitigations</h3>
+            <span class="muted-small">Requirement-linked controls</span>
+          </div>
+          <div id="sdlc-risks-grid" class="two-col-grid"></div>
+        </div>
+      </div>
+
+      <!-- ARTIFACT VIEWER -->
+      <div id="artifacts-viewer-card" class="card artifact-viewer-card hidden">
+        <div class="av-header">
+          <div>
+            <span class="eyebrow">Generated Outputs</span>
+            <h2 class="subcard-title">Artifact Viewer</h2>
+            <p class="muted-small">Inspect structured JSON trees, formatted Markdown reports, or original raw files from <code>outputs/</code>.</p>
+          </div>
+
+          <div class="av-controls">
+            <div class="segmented-control" role="group" aria-label="Artifact view mode">
+              <button type="button" class="seg-btn active" data-view-mode="formatted">Formatted</button>
+              <button type="button" class="seg-btn" data-view-mode="raw">Raw</button>
+            </div>
+
+            <div id="json-tree-controls" class="av-json-actions">
+              <button id="json-expand-all-btn" type="button" class="btn btn-ghost btn-sm">Expand All</button>
+              <button id="json-collapse-all-btn" type="button" class="btn btn-ghost btn-sm">Collapse All</button>
+            </div>
+
+            <button id="copy-artifact-btn" type="button" class="btn btn-ghost btn-sm">Copy JSON</button>
+            <a id="download-artifact-btn" href="#" class="btn btn-secondary btn-sm" download>Download</a>
+          </div>
+        </div>
+
+        <div class="artifact-tabs" role="tablist" aria-label="Output artifacts">
+          <button type="button" class="artifact-tab active" data-artifact="step1_json">
+            <span>step1_requirements.json</span>
+            <span class="tab-kind">JSON</span>
+          </button>
+          <button type="button" class="artifact-tab" data-artifact="step2_json">
+            <span>step2_sdlc_justification.json</span>
+            <span class="tab-kind">JSON</span>
+          </button>
+          <button type="button" class="artifact-tab" data-artifact="step2_md">
+            <span>step2_sdlc_justification.md</span>
+            <span class="tab-kind">MD</span>
+          </button>
+        </div>
+
+        <div id="artifact-summary-strip" class="av-summary-strip hidden"></div>
+
+        <div id="artifact-viewport" class="av-viewport">
+          <div id="artifact-formatted-view" class="av-formatted"></div>
+          <pre id="artifact-raw-view" class="code-viewer hidden"><code></code></pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
