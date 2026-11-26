@@ -482,9 +482,8 @@ generic textbook definitions or unsupported benefits.
 RANKED OUTPUT RULE:
 - ranked_sdlc_options MUST contain every distinct evaluated candidate model
   listed below: Rank 1 is primary and all remaining ranks are alternatives.
-  Sort highest to lowest;
-  equal percentages are allowed only when the calculated fit is genuinely tied.
-- Percentages must be sorted from highest to lowest; do not perturb tied scores.
+  Sort highest to lowest. Scores may be close when the fit is close, but do not
+  describe distinct displayed scores as tied.
 - Assign rank starting at 1. Each percentage must be an integer or float from
   0 to 100 based on fit with Step 1 requirements, functionality_profile,
   criticality, change frequency, and concrete risks.
@@ -498,9 +497,15 @@ RANKED OUTPUT RULE:
   Step 1 evidence cited in the rationale. Explain which requirement IDs change
   the model's fit; Python blends the model score with the signal-derived score
   in proportion to the fraction of relevant requirement IDs cited.
+- Keep each rationale focused on evidence and trade-offs, not an exact numeric
+  score: Python may lower a rounded tie by 0.01 to display a strictly descending
+  ranking while preserving the original score and tie-break order. Any generated
+  fallback rationale that states a score uses the final displayed percentage.
 - Let score differences emerge from the current-run factor and evidence signals.
-  Do not force a numeric gap or perturb equal fits to make the ranking look
-  more differentiated.
+  Python preserves the score sort/tie-break order and adjusts any rounded
+  percentage that would equal or exceed the preceding displayed percentage
+  downward by 0.01 (not below 0.0). Ensure each rationale explains the model's
+  actual relative fit from current-run evidence, not an artificial score gap.
 - Every ranked item, including Ranks 2 and 3, must have a specific rationale
   tied to at least one Step 1 requirement ID or a functionality_profile field
   (criticality, change frequency, or target functionality). Generic statements
@@ -1125,22 +1130,30 @@ def validate_sdlc_result(
     ]
     ranked_scores.sort(key=lambda item: (item[1], item[2]), reverse=True)
 
+    displayed_scores: list[tuple[str, float]] = []
+    previous_percentage: float | None = None
+    for model, score, _ in ranked_scores:
+        percentage = round(score, 2)
+        if previous_percentage is not None and percentage >= previous_percentage:
+            percentage = max(0.0, round(previous_percentage - 0.01, 2))
+        displayed_scores.append((model, percentage))
+        previous_percentage = percentage
+
     ranked_options: list[dict[str, Any]] = []
     dynamic_score_models: list[str] = []
     dynamic_rationale_models: list[str] = []
-    for model, score, _ in ranked_scores:
+    for model, percentage in displayed_scores:
         if model not in supplied_scores or model not in supplied_rationales:
             dynamic_score_models.append(model)
         rationale = supplied_rationales.get(model)
         if not rationale:
-            rationale = model_rationale(model, factors, score)
+            rationale = model_rationale(model, factors, percentage)
             dynamic_rationale_models.append(model)
-        score = round(score, 2)
         ranked_options.append(
             {
                 "rank": len(ranked_options) + 1,
                 "sdlc_model": model,
-                "percentage": score,
+                "percentage": percentage,
                 "rationale": rationale,
             }
         )
